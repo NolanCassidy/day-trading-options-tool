@@ -555,8 +555,7 @@ function ProfitEstimator({ option, currentPrice, onClose, onNavigate }) {
                             onChange={e => setHoursToSell(parseFloat(e.target.value))}
                         />
                         <div className="slider-labels">
-                            <span>30min</span>
-                            <span>1 day</span>
+                            <span>now</span>
                             <span>expiry ({option.daysToExpiry}d)</span>
                         </div>
                     </div>

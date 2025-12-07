@@ -272,15 +272,32 @@ def get_options_chain(ticker: str, expiry: Optional[str] = None) -> dict:
         # Scalp Score
         scalp_score = calculate_scalp_score(greeks['gamma'], vol_oi_ratio, spread_pct, greeks['delta'])
         
-        # Reversal %
+        # Reversal % - profit if stock returns to daily high (for CALL) or low (for PUT)
         reversal_pct = 0
-        if current_price and day_high and day_low and greeks['delta']:
-            if opt_type == 'CALL' and current_price < day_high:
-                price_move = day_high - current_price
-                reversal_pct = round((price_move * abs(greeks['delta']) / mid_price * 100), 1) if mid_price > 0 else 0
-            elif opt_type == 'PUT' and current_price > day_low:
-                price_move = current_price - day_low
-                reversal_pct = round((price_move * abs(greeks['delta']) / mid_price * 100), 1) if mid_price > 0 else 0
+        risk_ratio = 0
+        if current_price and day_high and day_low and greeks['delta'] and mid_price > 0:
+            if opt_type == 'CALL':
+                # Upside: stock goes to day high
+                if current_price < day_high:
+                    upside_move = day_high - current_price
+                    reversal_pct = round((upside_move * abs(greeks['delta']) / mid_price * 100), 1)
+                # Downside: stock goes to day low  
+                downside_move = max(0, current_price - day_low)
+                downside_pct = round((downside_move * abs(greeks['delta']) / mid_price * 100), 1) if downside_move > 0 else 0
+                # Risk ratio = reward at high / risk at low
+                if downside_pct > 0 and reversal_pct > 0:
+                    risk_ratio = round(reversal_pct / downside_pct, 2)
+            elif opt_type == 'PUT':
+                # Upside: stock goes to day low
+                if current_price > day_low:
+                    upside_move = current_price - day_low
+                    reversal_pct = round((upside_move * abs(greeks['delta']) / mid_price * 100), 1)
+                # Downside: stock goes to day high
+                downside_move = max(0, day_high - current_price)
+                downside_pct = round((downside_move * abs(greeks['delta']) / mid_price * 100), 1) if downside_move > 0 else 0
+                # Risk ratio = reward at low / risk at high
+                if downside_pct > 0 and reversal_pct > 0:
+                    risk_ratio = round(reversal_pct / downside_pct, 2)
 
         return {
             "strike": strike,
@@ -299,6 +316,7 @@ def get_options_chain(ticker: str, expiry: Optional[str] = None) -> dict:
             "gamma": greeks['gamma'],
             "scalpScore": scalp_score,
             "reversalPct": reversal_pct,
+            "riskRatio": risk_ratio,
             "spread": round(ask - bid, 2),
             "type": opt_type
         }

@@ -31,6 +31,7 @@ Scan 100+ stocks, get AI trade recommendations, analyze with interactive candles
 - **Scalp Score™**: Proprietary ranking for short-term momentum.
 - **Visual Heatmap**:
   - **Rev% (Reversal Percentage)**: Green highlighting for high-potential reversal plays.
+  - **R:R (Risk:Reward)**: Calculated based on potential reversal vs downside risk.
   - **OTM Dimming**: Instantly spot the "At-The-Money" line with dimmed OTM strikes.
 - **Greeks**: Real-time Delta, Gamma, Theta, Vega for every option.
 - **Filters**: Sort by Price, Spread, Volume, DTE.
@@ -39,10 +40,17 @@ Scan 100+ stocks, get AI trade recommendations, analyze with interactive candles
 
 ### 💰 Profit Estimator
 - **Interactive P&L Chart**: Visualize profit at expiry vs now.
+- **Stock Chart Overlay**: View the underlying stock chart directly on the estimator page (1m timeframe).
 - **Time Slider**: See how Theta decay affects your position hour-by-hour.
+- **URL Persistence**: Share or refresh specific option analysis pages (`#option/TICKER/SYMBOL`).
 - **Scenarios**: Quick buttons for ±5%, ±10%, Breakeven.
 
 ![Screenshot Placeholder: Profit Estimator]
+
+### 🔄 Live Data & Controls
+- **Manual Refresh**: On-demand price updates with rate-limit protection.
+- **Live Indicator**: Visual feedback when price data is updated.
+- **Smart Caching**: prevents unnecessary API calls while keeping data fresh.
 
 ## Quick Start
 
