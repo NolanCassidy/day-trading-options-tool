@@ -208,11 +208,84 @@ function OptionHistoryChart({ contractSymbol, onBack, embedded = false }) {
     )
 }
 
+// Helper for clickable axis labels
+const EditableAxisLabel = ({ value, onSave }) => {
+    const [isEditing, setIsEditing] = useState(false)
+    const [tempValue, setTempValue] = useState(value)
+
+    useEffect(() => setTempValue(value), [value])
+
+    if (isEditing) {
+        return (
+            <input
+                autoFocus
+                type="number"
+                value={tempValue}
+                onChange={e => setTempValue(e.target.value)}
+                onBlur={() => { setIsEditing(false); onSave(Number(tempValue)) }}
+                onKeyDown={e => { if (e.key === 'Enter') { e.target.blur() } }}
+                style={{
+                    width: '50px',
+                    background: '#111',
+                    border: '1px solid #444',
+                    color: '#fff',
+                    padding: '0 4px',
+                    fontSize: '12px',
+                    borderRadius: '4px'
+                }}
+            />
+        )
+    }
+
+    return (
+        <span
+            onClick={() => setIsEditing(true)}
+            style={{ cursor: 'pointer', borderBottom: '1px dashed #666' }}
+            title="Click to adjust range"
+        >
+            ${value?.toFixed(0)}
+        </span>
+    )
+}
+
 function ProfitEstimator({ option, currentPrice, onClose, onNavigate }) {
     const totalHours = (option.daysToExpiry || 1) * TRADING_HOURS_PER_DAY
-    const [hoursToSell, setHoursToSell] = useState(Math.floor(totalHours / 2))
+
+    // Calculate initial time: closest future 30 min interval
+    const getInitialHoursToSell = () => {
+        const now = new Date()
+        const day = now.getDay()
+        const hours = now.getHours() + now.getMinutes() / 60
+        const marketOpen = 6.5 // 6:30 AM
+        const marketClose = 13.0 // 1:00 PM
+
+        // If Weekend (Sat/Sun), default to Start of Day 1 + 30m (0.5)
+        if (day === 0 || day === 6) return 0.5
+
+        // If Before Market Open, default to Start of Day 1 + 30m (0.5)
+        if (hours < marketOpen) return 0.5
+
+        // If After Market Close, default to Start of Day 2 + 30m (6.5 + 0.5 = 7.0)
+        // (Assuming 1 day passed)
+        if (hours >= marketClose) return TRADING_HOURS_PER_DAY + 0.5
+
+        // If During Market Hours
+        const elapsed = hours - marketOpen
+        // Round up to next 0.5 interval
+        // e.g. 0.1 -> 0.5, 0.5 -> 1.0 (if we want STRICTLY future?), user said "if 2:35 go to 3"
+        // 2:35 is 2.58. Ceil(2.58 * 2) / 2 = 3.0. Correct.
+        let nextInterval = Math.ceil(elapsed * 2) / 2
+        if (nextInterval === elapsed) nextInterval += 0.5 // Ensure it moves forward if exactly on dot?
+
+        return Math.max(0.5, nextInterval)
+    }
+
+    const [hoursToSell, setHoursToSell] = useState(getInitialHoursToSell)
     const [isDragging, setIsDragging] = useState(false)
     const [liveCurrentPrice, setLiveCurrentPrice] = useState(currentPrice)
+    const [chartRange, setChartRange] = useState({ min: null, max: null })
+    const [liveDayHigh, setLiveDayHigh] = useState(option.dayHigh || 0)
+    const [liveDayLow, setLiveDayLow] = useState(option.dayLow || 0)
     const [refreshing, setRefreshing] = useState(false)
     const [lastRefresh, setLastRefresh] = useState(null)
 
@@ -247,6 +320,8 @@ function ProfitEstimator({ option, currentPrice, onClose, onNavigate }) {
                 const data = await res.json()
                 if (!data.error && data.price) {
                     setLiveCurrentPrice(data.price)
+                    if (data.dayHigh) setLiveDayHigh(data.dayHigh)
+                    if (data.dayLow) setLiveDayLow(data.dayLow)
                     setLastRefresh(new Date())
                 }
             }
@@ -257,20 +332,54 @@ function ProfitEstimator({ option, currentPrice, onClose, onNavigate }) {
         }
     }
 
-    const entryPrice = option?.ask || option?.lastPrice || 0
+    // Auto-refresh if High/Low data is missing (e.g. from old scan or weekends)
+    useEffect(() => {
+        if ((!option.dayHigh || !option.dayLow) && option.ticker) {
+            refreshPrice()
+        }
+    }, [option.dayHigh, option.dayLow, option.ticker])
+
+    // Use Mid Price for entry to match backend R:R logic
+    const midPrice = (option.bid && option.ask) ? (option.bid + option.ask) / 2 : option.lastPrice
+    // Fallback to Ask if available and Mid is 0? No, mid is better. 
+    // Backend: mid_price = (bid + ask) / 2 if bid and ask else last_price
+
+    // So entry price for P/L calcs (assuming we buy at mid/market)
+    // Ideally we buy at Ask, but for R:R "fair value" estimtation we use Mid.
+    // The user's screenshot implies Screener R:R is better (higher) than Estimator (lower cost basis?).
+    // Screener R:R = 2.43. Estimator R:R = 2.07.
+    // If Reward is same, and R:R is higher, Risk (Cost) must be lower.
+    // Screener uses Mid. Estimator used Ask (Entry Cost $152 vs Last $1.51).
+    // Ask is usually > Mid. So Cost is higher, R:R is lower.
+    // Switching to Mid will lower cost, raising R:R to match.
+    const entryPrice = midPrice || option.lastPrice || 0
+
     const iv = option.impliedVolatility || 30
     const optionType = option.type || 'CALL'
     const strike = option.strike
-    const dayHigh = option.dayHigh || liveCurrentPrice * 1.01
-    const dayLow = option.dayLow || liveCurrentPrice * 0.99
+
+    // Use live values if available, otherwise fallback to prop, otherwise calculate fallback
+    const dayHigh = liveDayHigh || option.dayHigh || liveCurrentPrice * 1.01
+    const dayLow = liveDayLow || option.dayLow || liveCurrentPrice * 0.99
+
+    // Initialize chart range (default 5% buffer around High/Low)
+    useEffect(() => {
+        if (liveCurrentPrice && chartRange.min === null) {
+            // Default: 5% below Low and 5% above High
+            // If High/Low not available yet, fallback to ±10% of current
+            const min = dayLow ? dayLow * 0.95 : liveCurrentPrice * 0.9
+            const max = dayHigh ? dayHigh * 1.05 : liveCurrentPrice * 1.1
+            setChartRange({ min, max })
+        }
+    }, [liveCurrentPrice, dayHigh, dayLow])
 
     // Calculate P&L data points
     const chartData = useMemo(() => {
         if (!option || !liveCurrentPrice) return []
 
-        // Generate price range (±15% from current price)
-        const minPrice = liveCurrentPrice * 0.85
-        const maxPrice = liveCurrentPrice * 1.15
+        // Generate price range based on custom bounds or defaults
+        const minPrice = chartRange.min || (dayLow ? dayLow * 0.95 : liveCurrentPrice * 0.9)
+        const maxPrice = chartRange.max || (dayHigh ? dayHigh * 1.05 : liveCurrentPrice * 1.1)
         const step = (maxPrice - minPrice) / 50
 
         // Time REMAINING on option when you sell = total time - time until sell
@@ -296,7 +405,7 @@ function ProfitEstimator({ option, currentPrice, onClose, onNavigate }) {
         }
 
         return data
-    }, [option, liveCurrentPrice, hoursToSell, entryPrice, iv, optionType, strike, totalHours])
+    }, [option, liveCurrentPrice, chartRange, hoursToSell, entryPrice, iv, optionType, strike, totalHours])
 
     // hoveredProfit is now calculated directly in handleChartHover to avoid re-renders
 
@@ -340,6 +449,30 @@ function ProfitEstimator({ option, currentPrice, onClose, onNavigate }) {
         return (val - entryPrice) * 100
     }, [dayLow, optionType, strike, hoursToSell, iv, totalHours, entryPrice])
 
+    // Calculate dynamic Option R:R based on P/L at High vs Low
+    const dynamicRR = useMemo(() => {
+        if (profitAtHigh === null || profitAtLow === null) return null
+
+        let reward, risk
+        if (optionType === 'CALL') {
+            reward = profitAtHigh
+            risk = profitAtLow
+        } else {
+            reward = profitAtLow
+            risk = profitAtHigh
+        }
+
+        // Risk is usually negative (a loss). treat it as absolute cost.
+        // If risk is positive (profit in both scenarios), R:R is infinite/undefined (great trade!)
+        if (risk >= 0) return '∞'
+
+        // If reward is negative (loss in both scenarios), R:R is 0
+        if (reward <= 0) return '0.00'
+
+        const ratio = reward / Math.abs(risk)
+        return ratio.toFixed(2)
+    }, [profitAtHigh, profitAtLow, optionType])
+
     // Format hours to readable date/time (PT timezone, market 6:30am-1pm)
     // Format hours to readable date/time (PT timezone, market 6:30am-1pm)
     const formatTime = (hours) => {
@@ -359,57 +492,41 @@ function ProfitEstimator({ option, currentPrice, onClose, onNavigate }) {
         const displayHour = hour > 12 ? hour - 12 : (hour === 0 ? 12 : hour)
         const timeStr = `${displayHour}:${mins.toString().padStart(2, '0')}${ampm}`
 
-        // Calculate target day by skipping weekends
-        const dayNames = ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat']
-        const todayIdx = new Date().getDay() // 0-6
-        let currentDayIdx = todayIdx
-        let daysToAdd = tradingDays
+        // Calculate actual date by adding calendar days until we satisfy trading days
+        // AND skipping weekends if we haven't started yet (e.g. valid today is Sunday)
+        const targetDate = new Date()
 
-        // If today is weekend, move to start of next week (Monday) before counting
-        // (Assuming we are starting from 'now', if now is Sat/Sun, trading starts Monday)
-        if (currentDayIdx === 0) { // Sunday
-            currentDayIdx = 1
-            // No days used yet
-        } else if (currentDayIdx === 6) { // Saturday
-            currentDayIdx = 1
-            // No days used yet
+        // 1. If today is weekend, advance to Monday first as "Day 0"
+        while (targetDate.getDay() === 0 || targetDate.getDay() === 6) {
+            targetDate.setDate(targetDate.getDate() + 1)
         }
 
+        // 2. Add trading days (skipping weekends)
+        let daysToAdd = tradingDays
         while (daysToAdd > 0) {
-            currentDayIdx = (currentDayIdx + 1) % 7
-            // If it's Saturday (6) or Sunday (0), it doesn't count as a trading day
-            // But we still advance the calendar day.
-            // Wait, simpler: just advance calendar days until we consume 'daysToAdd' trading days
-            if (currentDayIdx !== 0 && currentDayIdx !== 6) {
+            targetDate.setDate(targetDate.getDate() + 1)
+            if (targetDate.getDay() !== 0 && targetDate.getDay() !== 6) {
                 daysToAdd--
             }
         }
 
-        const dayName = dayNames[currentDayIdx]
-
-        // Calculate actual date
-        const targetDate = new Date()
-        let calendarDaysToAdd = 0
-        let tradingDaysRemaining = tradingDays
-
-        // Count calendar days needed to reach tradingDays trading days
-        while (tradingDaysRemaining > 0) {
-            calendarDaysToAdd++
-            const futureDay = (todayIdx + calendarDaysToAdd) % 7
-            if (futureDay !== 0 && futureDay !== 6) {
-                tradingDaysRemaining--
-            }
-        }
-        targetDate.setDate(targetDate.getDate() + calendarDaysToAdd)
-
+        // 3. Format Date
+        const dayIdx = targetDate.getDay()
+        const dayNames = ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat']
+        const dayName = dayNames[dayIdx]
         const month = targetDate.getMonth() + 1
         const day = targetDate.getDate()
         const year = targetDate.getFullYear().toString().slice(-2)
         const dateStr = `${month}/${day}/${year}`
 
-        if (tradingDays === 0) {
+        // 4. Format Label
+        const now = new Date()
+        const isToday = targetDate.getDate() === now.getDate() && targetDate.getMonth() === now.getMonth()
+        const isTomorrow = targetDate.getDate() === now.getDate() + 1 // Simple check (issues with month end but ok for now)
+
+        if (isToday) {
             return `today ${timeStr} (${dateStr})`
-        } else if (tradingDays === 1) {
+        } else if (isTomorrow) {
             return `tomorrow ${timeStr} (${dateStr})`
         } else {
             return `${dayName} ${timeStr} (${dateStr})`
@@ -526,173 +643,176 @@ function ProfitEstimator({ option, currentPrice, onClose, onNavigate }) {
                                 <span className="stat-value profit">+{option.reversalPct}%</span>
                             </div>
                         )}
-                        {option.riskRatio > 0 && (
-                            <div className="stat-box">
-                                <span className="stat-label">R:R</span>
-                                <span className={`stat-value ${option.riskRatio >= 2 ? 'profit' : option.riskRatio >= 1 ? '' : 'loss'}`}>
-                                    {option.riskRatio}:1
-                                </span>
-                            </div>
-                        )}
-                    </div>
 
-                    {/* Time Slider */}
-                    <div className="time-slider">
-                        <div className="time-header">
-                            <label>sell in <strong>{formatTime(hoursToSell)}</strong> <span className="tz-label">PT</span></label>
-                            <span className="time-hint">
-                                {hoursToSell <= TRADING_HOURS_PER_DAY / 2 ? 'morning' :
-                                    hoursToSell <= TRADING_HOURS_PER_DAY ? 'end of day' :
-                                        hoursToSell <= TRADING_HOURS_PER_DAY * 2 ? 'tomorrow' : 'later'}
-                            </span>
-                        </div>
-                        <input
-                            type="range"
-                            min="0.5"
-                            max={totalHours}
-                            step="0.5"
-                            value={hoursToSell}
-                            onChange={e => setHoursToSell(parseFloat(e.target.value))}
-                        />
-                        <div className="slider-labels">
-                            <span>now</span>
-                            <span>expiry ({option.daysToExpiry}d)</span>
+                        <div className="stat-box">
+                            <span className="stat-label">R:R</span>
+                            <span className="stat-value">{dynamicRR || '-'}</span>
                         </div>
                     </div>
+                </div>
 
-                    {/* Interactive P&L Chart */}
-                    <div className="chart-section">
-                        <div className="chart-container">
-                            <div className="chart-y-axis">
-                                <span className="y-label profit">+${maxProfit.toFixed(0)}</span>
-                                <span className="y-label zero">$0</span>
-                                <span className="y-label loss">-${Math.abs(maxLoss).toFixed(0)}</span>
-                            </div>
+                {/* Time Slider */}
+                <div className="time-slider">
+                    <div className="time-header">
+                        <label>sell in <strong>{formatTime(hoursToSell)}</strong> <span className="tz-label">PT</span></label>
+                        <span className="time-hint">
+                            {hoursToSell <= TRADING_HOURS_PER_DAY / 2 ? 'morning' :
+                                hoursToSell <= TRADING_HOURS_PER_DAY ? 'end of day' :
+                                    hoursToSell <= TRADING_HOURS_PER_DAY * 2 ? 'tomorrow' : 'later'}
+                        </span>
+                    </div>
+                    <input
+                        type="range"
+                        min="0.5"
+                        max={totalHours}
+                        step="0.5"
+                        value={hoursToSell}
+                        onChange={e => setHoursToSell(parseFloat(e.target.value))}
+                    />
+                    <div className="slider-labels">
+                        <span>now</span>
+                        <span>expiry ({option.daysToExpiry}d)</span>
+                    </div>
+                </div>
+
+                {/* Interactive P&L Chart */}
+                <div className="chart-section">
+                    <div className="chart-container">
+                        <div className="chart-y-axis">
+                            <span className="y-label profit">+${maxProfit.toFixed(0)}</span>
+                            <span className="y-label zero">$0</span>
+                            <span className="y-label loss">-${Math.abs(maxLoss).toFixed(0)}</span>
+                        </div>
+                        <div
+                            className="chart"
+                            onMouseMove={handleChartHover}
+                            onMouseLeave={handleChartLeave}
+                            onMouseDown={() => setIsDragging(true)}
+                            onMouseUp={() => setIsDragging(false)}
+                        >
+                            {/* Zero line */}
                             <div
-                                className="chart"
-                                onMouseMove={handleChartHover}
-                                onMouseLeave={handleChartLeave}
-                                onMouseDown={() => setIsDragging(true)}
-                                onMouseUp={() => setIsDragging(false)}
+                                className="zero-line"
+                                style={{ bottom: `${(maxY - maxLoss) / (maxY * 2) * 100}%` }}
+                            />
+
+                            {/* Hover price marker - controlled by ref */}
+                            <div
+                                ref={hoverLineRef}
+                                className="marker-line hover"
+                                style={{
+                                    left: '50%',
+                                    opacity: 0,
+                                    pointerEvents: 'none'
+                                }}
+                            />
+
+                            {/* Current price marker */}
+                            <div
+                                className="marker-line current"
+                                style={{
+                                    left: `${((liveCurrentPrice - chartData[0]?.stockPrice) / (chartData[chartData.length - 1]?.stockPrice - chartData[0]?.stockPrice)) * 100}%`
+                                }}
                             >
-                                {/* Zero line */}
-                                <div
-                                    className="zero-line"
-                                    style={{ bottom: `${(maxY - maxLoss) / (maxY * 2) * 100}%` }}
-                                />
-
-                                {/* Hover price marker - controlled by ref */}
-                                <div
-                                    ref={hoverLineRef}
-                                    className="marker-line hover"
-                                    style={{
-                                        left: '50%',
-                                        opacity: 0,
-                                        pointerEvents: 'none'
-                                    }}
-                                />
-
-                                {/* Current price marker */}
-                                <div
-                                    className="marker-line current"
-                                    style={{
-                                        left: `${((liveCurrentPrice - chartData[0]?.stockPrice) / (chartData[chartData.length - 1]?.stockPrice - chartData[0]?.stockPrice)) * 100}%`
-                                    }}
-                                >
-                                    <span className="marker-label">now</span>
-                                </div>
-
-                                {/* Daily High marker */}
-                                {dayHigh && dayHigh >= chartData[0]?.stockPrice && dayHigh <= chartData[chartData.length - 1]?.stockPrice && (
-                                    <div
-                                        className="marker-line high"
-                                        style={{
-                                            left: `${((dayHigh - chartData[0]?.stockPrice) / (chartData[chartData.length - 1]?.stockPrice - chartData[0]?.stockPrice)) * 100}%`
-                                        }}
-                                    />
-                                )}
-
-                                {/* Daily Low marker */}
-                                {dayLow && dayLow >= chartData[0]?.stockPrice && dayLow <= chartData[chartData.length - 1]?.stockPrice && (
-                                    <div
-                                        className="marker-line low"
-                                        style={{
-                                            left: `${((dayLow - chartData[0]?.stockPrice) / (chartData[chartData.length - 1]?.stockPrice - chartData[0]?.stockPrice)) * 100}%`
-                                        }}
-                                    />
-                                )}
-
-                                {/* Profit/loss bars */}
-                                <div className="bars">
-                                    {chartData.map((d, i) => {
-                                        const barHeight = Math.abs(d.profit) / maxY * 50
-                                        const isProfit = d.profit >= 0
-                                        return (
-                                            <div
-                                                key={i}
-                                                className={`bar ${isProfit ? 'profit' : 'loss'}`}
-                                                style={{
-                                                    left: `${(i / chartData.length) * 100}%`,
-                                                    width: `${100 / chartData.length}%`,
-                                                    height: `${barHeight}%`,
-                                                    bottom: isProfit ? '50%' : 'auto',
-                                                    top: isProfit ? 'auto' : '50%'
-                                                }}
-                                            />
-                                        )
-                                    })}
-                                </div>
+                                <span className="marker-label">now</span>
                             </div>
-                        </div>
-                        <div className="chart-x-axis">
-                            <span>${chartData[0]?.stockPrice.toFixed(0)}</span>
-                            {dayLow && dayLow >= chartData[0]?.stockPrice && dayLow <= chartData[chartData.length - 1]?.stockPrice && (
-                                <span className="x-label-low">${dayLow.toFixed(0)} <small>low</small></span>
-                            )}
-                            <span>${liveCurrentPrice?.toFixed(0)}</span>
+
+                            {/* Daily High marker */}
                             {dayHigh && dayHigh >= chartData[0]?.stockPrice && dayHigh <= chartData[chartData.length - 1]?.stockPrice && (
-                                <span className="x-label-high">${dayHigh.toFixed(0)} <small>high</small></span>
+                                <div
+                                    className="marker-line high"
+                                    style={{
+                                        left: `${((dayHigh - chartData[0]?.stockPrice) / (chartData[chartData.length - 1]?.stockPrice - chartData[0]?.stockPrice)) * 100}%`
+                                    }}
+                                />
                             )}
-                            <span>${chartData[chartData.length - 1]?.stockPrice.toFixed(0)}</span>
-                        </div>
-                        {/* Y-axis labels for high/low P/L */}
-                        {(profitAtHigh !== null || profitAtLow !== null) && (
-                            <div className="high-low-pnl">
-                                {profitAtLow !== null && (
-                                    <span className={profitAtLow >= 0 ? 'profit' : 'loss'}>
-                                        @ low: {profitAtLow >= 0 ? '+' : ''}${profitAtLow.toFixed(0)}
-                                    </span>
-                                )}
-                                {profitAtHigh !== null && (
-                                    <span className={profitAtHigh >= 0 ? 'profit' : 'loss'}>
-                                        @ high: {profitAtHigh >= 0 ? '+' : ''}${profitAtHigh.toFixed(0)}
-                                    </span>
-                                )}
+
+                            {/* Daily Low marker */}
+                            {dayLow && dayLow >= chartData[0]?.stockPrice && dayLow <= chartData[chartData.length - 1]?.stockPrice && (
+                                <div
+                                    className="marker-line low"
+                                    style={{
+                                        left: `${((dayLow - chartData[0]?.stockPrice) / (chartData[chartData.length - 1]?.stockPrice - chartData[0]?.stockPrice)) * 100}%`
+                                    }}
+                                />
+                            )}
+
+                            {/* Profit/loss bars */}
+                            <div className="bars">
+                                {chartData.map((d, i) => {
+                                    const barHeight = Math.abs(d.profit) / maxY * 50
+                                    const isProfit = d.profit >= 0
+                                    return (
+                                        <div
+                                            key={i}
+                                            className={`bar ${isProfit ? 'profit' : 'loss'}`}
+                                            style={{
+                                                left: `${(i / chartData.length) * 100}%`,
+                                                width: `${100 / chartData.length}%`,
+                                                height: `${barHeight}%`,
+                                                bottom: isProfit ? '50%' : 'auto',
+                                                top: isProfit ? 'auto' : '50%'
+                                            }}
+                                        />
+                                    )
+                                })}
                             </div>
-                        )}
-                        <div className="chart-hover-info" ref={hoverInfoRef}>
-                            <span className="muted">drag on chart to see P/L</span>
                         </div>
                     </div>
-                    {/* Option History Chart */}
-                    <div className="history-section">
-                        <h3>option price history</h3>
-                        <OptionHistoryChart
-                            contractSymbol={option.contractSymbol}
-                            onBack={() => { }}
-                            embedded={true}
+                    <div className="chart-x-axis">
+                        <EditableAxisLabel
+                            value={chartData[0]?.stockPrice}
+                            onSave={val => setChartRange(prev => ({ ...prev, min: val }))}
+                        />
+                        {dayLow && dayLow >= chartData[0]?.stockPrice && dayLow <= chartData[chartData.length - 1]?.stockPrice && (
+                            <span className="x-label-low">${dayLow.toFixed(0)} <small>low</small></span>
+                        )}
+                        <span>${liveCurrentPrice?.toFixed(0)}</span>
+                        {dayHigh && dayHigh >= chartData[0]?.stockPrice && dayHigh <= chartData[chartData.length - 1]?.stockPrice && (
+                            <span className="x-label-high">${dayHigh.toFixed(0)} <small>high</small></span>
+                        )}
+                        <EditableAxisLabel
+                            value={chartData[chartData.length - 1]?.stockPrice}
+                            onSave={val => setChartRange(prev => ({ ...prev, max: val }))}
                         />
                     </div>
-                    {/* Stock Price Chart */}
-                    {option.ticker && (
-                        <div className="history-section">
-                            <h3>{option.ticker} stock chart</h3>
-                            <div className="embedded-stock-chart">
-                                <StockChart ticker={option.ticker} strikes={[option.strike]} defaultPeriod="1m" />
-                            </div>
+                    {/* Y-axis labels for high/low P/L */}
+                    {(profitAtHigh !== null || profitAtLow !== null) && (
+                        <div className="high-low-pnl">
+                            {profitAtLow !== null && (
+                                <span className={profitAtLow >= 0 ? 'profit' : 'loss'}>
+                                    @ low: {profitAtLow >= 0 ? '+' : ''}${profitAtLow.toFixed(0)} ({profitAtLow >= 0 ? '+' : ''}{((profitAtLow / entryCost) * 100).toFixed(0)}%)
+                                </span>
+                            )}
+                            {profitAtHigh !== null && (
+                                <span className={profitAtHigh >= 0 ? 'profit' : 'loss'}>
+                                    @ high: {profitAtHigh >= 0 ? '+' : ''}${profitAtHigh.toFixed(0)} ({profitAtHigh >= 0 ? '+' : ''}{((profitAtHigh / entryCost) * 100).toFixed(0)}%)
+                                </span>
+                            )}
                         </div>
                     )}
+                    <div className="chart-hover-info" ref={hoverInfoRef}>
+                        <span className="muted">drag on chart to see P/L</span>
+                    </div>
                 </div>
+                {/* Option History Chart */}
+                <div className="history-section">
+                    <h3>option price history</h3>
+                    <OptionHistoryChart
+                        contractSymbol={option.contractSymbol}
+                        onBack={() => { }}
+                        embedded={true}
+                    />
+                </div>
+                {/* Stock Price Chart */}
+                {option.ticker && (
+                    <div className="history-section">
+                        <h3>{option.ticker} stock chart</h3>
+                        <div className="embedded-stock-chart">
+                            <StockChart ticker={option.ticker} strikes={[option.strike]} defaultPeriod="1m" />
+                        </div>
+                    </div>
+                )}
             </div>
         </div>
     )

@@ -119,6 +119,37 @@ def calculate_scalp_score(gamma: float, vol_oi_ratio: float, spread_pct: float,
     score = gamma_score + vol_oi_score - spread_penalty + atm_bonus
     return round(max(score, 0), 1)
 
+
+def calculate_option_price(option_type: str, stock_price: float, strike: float, 
+                         time_to_expiry: float, iv: float, risk_free_rate: float = 0.05) -> float:
+    """
+    Calculate theoretical option price using Black-Scholes.
+    """
+    if time_to_expiry <= 0 or iv <= 0 or stock_price <= 0 or strike <= 0:
+        if option_type.lower() == 'call':
+            return max(0.0, stock_price - strike)
+        else:
+            return max(0.0, strike - stock_price)
+
+    try:
+        S = stock_price
+        K = strike
+        T = time_to_expiry
+        r = risk_free_rate
+        sigma = iv
+
+        d1 = (math.log(S / K) + (r + 0.5 * sigma ** 2) * T) / (sigma * math.sqrt(T))
+        d2 = d1 - sigma * math.sqrt(T)
+
+        if option_type.lower() == 'call':
+            price = S * norm.cdf(d1) - K * math.exp(-r * T) * norm.cdf(d2)
+        else:
+            price = K * math.exp(-r * T) * norm.cdf(-d2) - S * norm.cdf(-d1)
+            
+        return max(0.01, price) # Minimum value
+    except:
+        return 0.0
+
 def cached_ticker(ticker: str):
     """Get cached ticker or create new one"""
     now = time.time()
@@ -149,24 +180,86 @@ def with_retry(func, max_retries=3, initial_delay=1):
     return wrapper
 
 
+def get_robust_stock_data(stock) -> dict:
+    """
+    Robustly fetch current price, high, and low data.
+    Falls back to historical data if real-time info is missing/zero.
+    """
+    current_price = 0
+    day_high = 0
+    day_low = 0
+    previous_close = 0
+    
+    # 1. Try fast_info (fastest)
+    try:
+        fast = stock.fast_info
+        current_price = fast.last_price
+        day_high = fast.day_high
+        day_low = fast.day_low
+        previous_close = fast.previous_close
+    except:
+        pass
+    
+    # 2. Try regular info if values are missing
+    if not current_price or not day_high or not day_low:
+        try:
+            info = stock.info
+            if not current_price:
+                current_price = info.get('currentPrice') or info.get('regularMarketPrice', 0)
+            if not day_high:
+                day_high = info.get('dayHigh') or info.get('regularMarketDayHigh', 0)
+            if not day_low:
+                day_low = info.get('dayLow') or info.get('regularMarketDayLow', 0)
+            if not previous_close:
+                previous_close = info.get('previousClose', 0)
+        except:
+            pass
+            
+    # 3. Fallback to 5d history if still missing/zero (common on weekends/holidays)
+    if not current_price or not day_high or not day_low:
+        try:
+            # Get last 5 days to ensure we find the last trading day
+            hist = stock.history(period='5d')
+            if not hist.empty:
+                last_row = hist.iloc[-1]
+                # If we have a current price but no high/low, use the history's high/low
+                # If we have NO current price, use the history's close
+                if not current_price:
+                    current_price = last_row['Close']
+                
+                # Only overwrite if we don't have valid values
+                if not day_high:
+                    day_high = last_row['High']
+                if not day_low:
+                    day_low = last_row['Low']
+                    
+                # If previous close is missing, use the close of the day BEFORE the last one
+                if not previous_close and len(hist) >= 2:
+                    previous_close = hist['Close'].iloc[-2]
+        except:
+            pass
+            
+    return {
+        "current_price": current_price,
+        "day_high": day_high,
+        "day_low": day_low,
+        "previous_close": previous_close
+    }
+
+
 @with_retry
 def get_stock_quote(ticker: str) -> dict:
     """Get current stock quote"""
     stock = yf.Ticker(ticker)
     info = stock.info
     
-    # Get real-time price from fast_info if available
-    try:
-        fast = stock.fast_info
-        current_price = fast.last_price
-        previous_close = fast.previous_close
-        change = current_price - previous_close if current_price and previous_close else 0
-        change_percent = (change / previous_close * 100) if previous_close else 0
-    except:
-        current_price = info.get('currentPrice') or info.get('regularMarketPrice', 0)
-        previous_close = info.get('previousClose', 0)
-        change = current_price - previous_close if current_price and previous_close else 0
-        change_percent = (change / previous_close * 100) if previous_close else 0
+    # Use robust data fetching
+    data = get_robust_stock_data(stock)
+    current_price = data['current_price']
+    previous_close = data['previous_close']
+    
+    change = current_price - previous_close if current_price and previous_close else 0
+    change_percent = (change / previous_close * 100) if previous_close else 0
     
     return {
         "symbol": ticker.upper(),
@@ -187,12 +280,13 @@ def get_quote_lite(ticker: str) -> dict:
     """
     try:
         stock = yf.Ticker(ticker)
-        fast = stock.fast_info
         
-        current_price = fast.last_price
-        previous_close = fast.previous_close
-        day_high = fast.day_high
-        day_low = fast.day_low
+        # Use robust data fetching
+        data = get_robust_stock_data(stock)
+        current_price = data['current_price']
+        day_high = data['day_high']
+        day_low = data['day_low']
+        previous_close = data['previous_close']
         
         change = current_price - previous_close if current_price and previous_close else 0
         change_percent = (change / previous_close * 100) if previous_close else 0
@@ -234,13 +328,18 @@ def get_options_chain(ticker: str, expiry: Optional[str] = None) -> dict:
     
     # Get stock data for Greeks/Reversal calc
     try:
+        # Check history first as it was doing before, but fallback if empty
         hist = stock.history(period='1d')
         if not hist.empty:
             current_price = hist['Close'].iloc[-1]
             day_high = hist['High'].iloc[-1]
             day_low = hist['Low'].iloc[-1]
         else:
-            current_price = day_high = day_low = 0
+            # Fallback to robust fetching
+            data = get_robust_stock_data(stock)
+            current_price = data['current_price']
+            day_high = data['day_high']
+            day_low = data['day_low']
     except:
         current_price = day_high = day_low = 0
 
@@ -275,29 +374,86 @@ def get_options_chain(ticker: str, expiry: Optional[str] = None) -> dict:
         # Reversal % - profit if stock returns to daily high (for CALL) or low (for PUT)
         reversal_pct = 0
         risk_ratio = 0
-        if current_price and day_high and day_low and greeks['delta'] and mid_price > 0:
+        
+        if current_price and day_high and day_low and mid_price > 0:
+            # Use Black-Scholes for accurate Risk/Reward
+            # Use Black-Scholes for accurate Risk/Reward
+            # Target P/L calc
+            
+            # Match Frontend: Use Trading Hours Model for Consistency
+            # Logic: Calculate offset based on current time of day "next 30m" logic
+            
+            non_trading_deduction = 0.5
+            try:
+                now = datetime.now() # System time (PT)
+                day = now.weekday() # 0=Mon, 6=Sun
+                current_hour = now.hour + now.minute / 60.0
+                market_open = 6.5
+                market_close = 13.0
+                
+                if day >= 5: # Sat/Sun
+                    non_trading_deduction = 0.5
+                elif current_hour < market_open:
+                    non_trading_deduction = 0.5
+                elif current_hour >= market_close:
+                    non_trading_deduction = 6.5 + 0.5 # Start of next day
+                else:
+                    # In market hours
+                    elapsed = current_hour - market_open
+                    next_interval = math.ceil(elapsed * 2) / 2.0
+                    if next_interval == elapsed:
+                        next_interval += 0.5
+                    non_trading_deduction = max(0.5, next_interval)
+            except:
+                non_trading_deduction = 0.5
+
+            # 1. Estimate total trading hours
+            est_trading_days = max(1, days_to_expiry)
+            total_trading_hours = est_trading_days * 6.5
+            
+            # 2. Subtract calculated deduction
+            hours_remaining = max(0.1, total_trading_hours - non_trading_deduction)
+            
+            # 3. Calculate T using Trading Year
+            rr_tte = hours_remaining / (252 * 6.5)
+            
             if opt_type == 'CALL':
-                # Upside: stock goes to day high
+                # Reward: Price at Day High
+                price_at_high = calculate_option_price('call', day_high, strike, rr_tte, iv)
+                reward = price_at_high - mid_price
+                
+                # Risk: Price at Day Low
+                price_at_low = calculate_option_price('call', day_low, strike, rr_tte, iv)
+                risk = price_at_low - mid_price # Expected to be negative
+                
+                # Reversal % (Bonus metric)
+                # If current < day_high, potential upside
                 if current_price < day_high:
-                    upside_move = day_high - current_price
-                    reversal_pct = round((upside_move * abs(greeks['delta']) / mid_price * 100), 1)
-                # Downside: stock goes to day low  
-                downside_move = max(0, current_price - day_low)
-                downside_pct = round((downside_move * abs(greeks['delta']) / mid_price * 100), 1) if downside_move > 0 else 0
-                # Risk ratio = reward at high / risk at low
-                if downside_pct > 0 and reversal_pct > 0:
-                    risk_ratio = round(reversal_pct / downside_pct, 2)
+                    reversal_pct = round((reward / mid_price * 100), 1)
+
             elif opt_type == 'PUT':
-                # Upside: stock goes to day low
+                # Reward: Price at Day Low
+                price_at_low = calculate_option_price('put', day_low, strike, rr_tte, iv)
+                reward = price_at_low - mid_price
+                
+                # Risk: Price at Day High
+                price_at_high = calculate_option_price('put', day_high, strike, rr_tte, iv)
+                risk = price_at_high - mid_price # Expected to be negative
+
+                # Reversal %
+                # If current > day_low, potential upside
                 if current_price > day_low:
-                    upside_move = current_price - day_low
-                    reversal_pct = round((upside_move * abs(greeks['delta']) / mid_price * 100), 1)
-                # Downside: stock goes to day high
-                downside_move = max(0, day_high - current_price)
-                downside_pct = round((downside_move * abs(greeks['delta']) / mid_price * 100), 1) if downside_move > 0 else 0
-                # Risk ratio = reward at low / risk at high
-                if downside_pct > 0 and reversal_pct > 0:
-                    risk_ratio = round(reversal_pct / downside_pct, 2)
+                     reversal_pct = round((reward / mid_price * 100), 1)
+
+            # Calculate R:R Ratio
+            # If Risk is >= 0 (Profit in both cases), Infinite R:R
+            if risk >= 0:
+                risk_ratio = 999.9 # Effectively infinite
+            elif reward <= 0:
+                risk_ratio = 0.0
+            else:
+                risk_ratio = round(reward / abs(risk), 2)
+
 
         return {
             "strike": strike,
@@ -348,20 +504,14 @@ def get_top_volume_options(ticker: str, top_n: int = 10) -> dict:
         
         # Get stock price info including high/low
         try:
-            fast = stock.fast_info
-            current_price = fast.last_price
-            day_high = fast.day_high
-            day_low = fast.day_low
+            data = get_robust_stock_data(stock)
+            current_price = data['current_price']
+            day_high = data['day_high']
+            day_low = data['day_low']
         except:
-            try:
-                info = stock.info
-                current_price = info.get('currentPrice') or info.get('regularMarketPrice', 0)
-                day_high = info.get('dayHigh', current_price)
-                day_low = info.get('dayLow', current_price)
-            except:
-                current_price = 0
-                day_high = 0
-                day_low = 0
+            current_price = 0
+            day_high = 0
+            day_low = 0
         
         # Try to get options list with retry
         expirations = None
@@ -480,27 +630,69 @@ def get_top_volume_options(ticker: str, top_n: int = 10) -> dict:
         # For CALL: gain if stock goes to high, loss if stock goes to low
         # For PUT: gain if stock goes to low, loss if stock goes to high
         risk_ratio = 0
-        if current_price and day_high and day_low and greeks['delta'] and mid_price > 0:
+        # Calculate risk/reward ratio using Black-Scholes
+        risk_ratio = 0
+        if current_price and day_high and day_low and mid_price > 0:
+            # Match Frontend: Use Trading Hours Model with dynamic time
+            
+            non_trading_deduction = 0.5
+            try:
+                now = datetime.now()
+                day = now.weekday()
+                current_hour = now.hour + now.minute / 60.0
+                market_open = 6.5
+                market_close = 13.0
+                
+                if day >= 5: # Sat/Sun (5,6)
+                    non_trading_deduction = 0.5
+                elif current_hour < market_open:
+                    non_trading_deduction = 0.5
+                elif current_hour >= market_close:
+                    non_trading_deduction = 6.5 + 0.5
+                else:
+                    elapsed = current_hour - market_open
+                    next_interval = math.ceil(elapsed * 2) / 2.0
+                    if next_interval == elapsed:
+                        next_interval += 0.5
+                    non_trading_deduction = max(0.5, next_interval)
+            except:
+                non_trading_deduction = 0.5
+
+            # 1. Estimate total trading hours
+            est_trading_days = max(1, days_to_expiry)
+            total_trading_hours = est_trading_days * 6.5
+            
+            # 2. Subtract calculated deduction
+            hours_remaining = max(0.1, total_trading_hours - non_trading_deduction)
+            
+            # 3. Calculate T using Trading Year
+            rr_tte = hours_remaining / (252 * 6.5)
+
             if option_type == 'CALL':
-                # Upside: stock goes to day high
-                upside_move = max(0, day_high - current_price)
-                upside_pct = round((upside_move * abs(greeks['delta']) / mid_price * 100), 1)
-                # Downside: stock goes to day low
-                downside_move = max(0, current_price - day_low)
-                downside_pct = round((downside_move * abs(greeks['delta']) / mid_price * 100), 1)
-                # Risk ratio = potential reward / potential risk
-                if downside_pct > 0:
-                    risk_ratio = round(upside_pct / downside_pct, 2)
+                # Reward: Price at Day High
+                price_at_high = calculate_option_price('call', day_high, strike, rr_tte, iv)
+                reward = price_at_high - mid_price
+                
+                # Risk: Price at Day Low
+                price_at_low = calculate_option_price('call', day_low, strike, rr_tte, iv)
+                risk = price_at_low - mid_price
+                
             elif option_type == 'PUT':
-                # Upside: stock goes to day low
-                upside_move = max(0, current_price - day_low)
-                upside_pct = round((upside_move * abs(greeks['delta']) / mid_price * 100), 1)
-                # Downside: stock goes to day high
-                downside_move = max(0, day_high - current_price)
-                downside_pct = round((downside_move * abs(greeks['delta']) / mid_price * 100), 1)
-                # Risk ratio = potential reward / potential risk
-                if downside_pct > 0:
-                    risk_ratio = round(upside_pct / downside_pct, 2)
+                # Reward: Price at Day Low
+                price_at_low = calculate_option_price('put', day_low, strike, rr_tte, iv)
+                reward = price_at_low - mid_price
+                
+                # Risk: Price at Day High
+                price_at_high = calculate_option_price('put', day_high, strike, rr_tte, iv)
+                risk = price_at_high - mid_price
+
+            # Calculate R:R Ratio
+            if risk >= 0:
+                risk_ratio = 999.9  # Infinite
+            elif reward <= 0:
+                risk_ratio = 0.0
+            else:
+                risk_ratio = round(reward / abs(risk), 2)
         
         return {
             "type": option_type,
@@ -527,7 +719,10 @@ def get_top_volume_options(ticker: str, top_n: int = 10) -> dict:
             "reversalProfit": reversal_profit,
             "reversalPct": reversal_pct,
             # Risk/Reward ratio
-            "riskRatio": risk_ratio
+            "riskRatio": risk_ratio,
+            # Ensure consistent High/Low data for frontend estimator
+            "dayHigh": day_high,
+            "dayLow": day_low
         }
     
     # Sort by volume and get top N
