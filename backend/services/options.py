@@ -179,6 +179,36 @@ def get_stock_quote(ticker: str) -> dict:
         "marketCap": info.get('marketCap', 0),
     }
 
+
+def get_quote_lite(ticker: str) -> dict:
+    """
+    Lightweight quote for live updates - only essential price data.
+    Uses fast_info for speed (~0.2s vs 0.5s for full info).
+    """
+    try:
+        stock = yf.Ticker(ticker)
+        fast = stock.fast_info
+        
+        current_price = fast.last_price
+        previous_close = fast.previous_close
+        day_high = fast.day_high
+        day_low = fast.day_low
+        
+        change = current_price - previous_close if current_price and previous_close else 0
+        change_percent = (change / previous_close * 100) if previous_close else 0
+        
+        return {
+            "symbol": ticker.upper(),
+            "price": round(current_price, 2) if current_price else 0,
+            "change": round(change, 2),
+            "changePercent": round(change_percent, 2),
+            "dayHigh": round(day_high, 2) if day_high else 0,
+            "dayLow": round(day_low, 2) if day_low else 0,
+            "timestamp": int(time.time() * 1000)
+        }
+    except Exception as e:
+        return {"error": str(e), "symbol": ticker.upper()}
+
 @with_retry
 def get_options_chain(ticker: str, expiry: Optional[str] = None) -> dict:
     """Get options chain for a stock"""

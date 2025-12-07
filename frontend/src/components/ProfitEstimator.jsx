@@ -1,5 +1,6 @@
 import { useState, useMemo, useEffect, useRef } from 'react'
 import { createChart, AreaSeries } from 'lightweight-charts'
+import StockChart from './StockChart'
 
 /**
  * Proper Black-Scholes option pricing approximation
@@ -210,23 +211,66 @@ function OptionHistoryChart({ contractSymbol, onBack, embedded = false }) {
 function ProfitEstimator({ option, currentPrice, onClose, onNavigate }) {
     const totalHours = (option.daysToExpiry || 1) * TRADING_HOURS_PER_DAY
     const [hoursToSell, setHoursToSell] = useState(Math.floor(totalHours / 2))
-    const [hoveredPrice, setHoveredPrice] = useState(null)
     const [isDragging, setIsDragging] = useState(false)
+    const [liveCurrentPrice, setLiveCurrentPrice] = useState(currentPrice)
+    const [refreshing, setRefreshing] = useState(false)
+    const [lastRefresh, setLastRefresh] = useState(null)
+
+    // Use refs for hover to avoid re-renders that cause scroll jump
+    const hoverLineRef = useRef(null)
+    const hoverInfoRef = useRef(null)
+    const hoveredPriceRef = useRef(null)
+
+    // Lock body scroll when mounted (save scroll position)
+    useEffect(() => {
+        const scrollY = window.scrollY
+        document.body.style.position = 'fixed'
+        document.body.style.top = `-${scrollY}px`
+        document.body.style.left = '0'
+        document.body.style.right = '0'
+        return () => {
+            document.body.style.position = ''
+            document.body.style.top = ''
+            document.body.style.left = ''
+            document.body.style.right = ''
+            window.scrollTo(0, scrollY)
+        }
+    }, [])
+
+    // Refresh price function
+    const refreshPrice = async () => {
+        if (!option.ticker || refreshing) return
+        setRefreshing(true)
+        try {
+            const res = await fetch(`${API_BASE}/api/quote-lite/${option.ticker}`)
+            if (res.ok) {
+                const data = await res.json()
+                if (!data.error && data.price) {
+                    setLiveCurrentPrice(data.price)
+                    setLastRefresh(new Date())
+                }
+            }
+        } catch (e) {
+            console.error('Price refresh failed:', e)
+        } finally {
+            setRefreshing(false)
+        }
+    }
 
     const entryPrice = option?.ask || option?.lastPrice || 0
     const iv = option.impliedVolatility || 30
     const optionType = option.type || 'CALL'
     const strike = option.strike
-    const dayHigh = option.dayHigh || currentPrice * 1.01
-    const dayLow = option.dayLow || currentPrice * 0.99
+    const dayHigh = option.dayHigh || liveCurrentPrice * 1.01
+    const dayLow = option.dayLow || liveCurrentPrice * 0.99
 
     // Calculate P&L data points
     const chartData = useMemo(() => {
-        if (!option || !currentPrice) return []
+        if (!option || !liveCurrentPrice) return []
 
         // Generate price range (±15% from current price)
-        const minPrice = currentPrice * 0.85
-        const maxPrice = currentPrice * 1.15
+        const minPrice = liveCurrentPrice * 0.85
+        const maxPrice = liveCurrentPrice * 1.15
         const step = (maxPrice - minPrice) / 50
 
         // Time REMAINING on option when you sell = total time - time until sell
@@ -252,21 +296,9 @@ function ProfitEstimator({ option, currentPrice, onClose, onNavigate }) {
         }
 
         return data
-    }, [option, currentPrice, hoursToSell, entryPrice, iv, optionType, strike, totalHours])
+    }, [option, liveCurrentPrice, hoursToSell, entryPrice, iv, optionType, strike, totalHours])
 
-    // Calculate profit at hovered price
-    const hoveredProfit = useMemo(() => {
-        if (hoveredPrice === null) return null
-        const hoursRemaining = Math.max(0, totalHours - hoursToSell)
-        const estimatedValue = estimateOptionValue(
-            optionType, strike, hoveredPrice, hoursRemaining, iv, totalHours
-        )
-        return {
-            price: hoveredPrice,
-            optionValue: estimatedValue,
-            profit: (estimatedValue - entryPrice) * 100
-        }
-    }, [hoveredPrice, optionType, strike, hoursToSell, iv, totalHours, entryPrice])
+    // hoveredProfit is now calculated directly in handleChartHover to avoid re-renders
 
     // Calculate breakeven
     const breakeven = useMemo(() => {
@@ -384,23 +416,44 @@ function ProfitEstimator({ option, currentPrice, onClose, onNavigate }) {
         }
     }
 
-    // Handle chart mouse interaction
+    // Handle chart mouse interaction - use direct DOM manipulation to avoid re-renders
     const handleChartHover = (e) => {
+        e.preventDefault()
+        e.stopPropagation()
         const rect = e.currentTarget.getBoundingClientRect()
         const x = e.clientX - rect.left
-        const percent = x / rect.width
+        const percent = Math.max(0, Math.min(1, x / rect.width))
 
-        if (chartData.length > 0) {
+        if (chartData.length > 0 && hoverLineRef.current && hoverInfoRef.current) {
             const minP = chartData[0].stockPrice
             const maxP = chartData[chartData.length - 1].stockPrice
             const price = minP + (maxP - minP) * percent
-            setHoveredPrice(price)
+            hoveredPriceRef.current = price
+
+            // Calculate profit at this price
+            const hoursRemaining = Math.max(0, totalHours - hoursToSell)
+            const estimatedValue = estimateOptionValue(
+                optionType, strike, price, hoursRemaining, iv, totalHours
+            )
+            const profit = (estimatedValue - entryPrice) * 100
+
+            // Update hover line position directly
+            hoverLineRef.current.style.left = `${percent * 100}%`
+            hoverLineRef.current.style.opacity = '1'
+
+            // Update hover info text directly
+            const profitStr = profit >= 0 ? `+$${profit.toFixed(0)}` : `-$${Math.abs(profit).toFixed(0)}`
+            const pctStr = profit >= 0 ? `+${((profit / entryCost) * 100).toFixed(0)}%` : `${((profit / entryCost) * 100).toFixed(0)}%`
+            hoverInfoRef.current.innerHTML = `<strong>$${price.toFixed(2)}</strong> → <strong class="${profit >= 0 ? 'profit' : 'loss'}">${profitStr} (${pctStr})</strong>`
         }
     }
 
-    const handleChartLeave = () => {
-        if (!isDragging) {
-            setHoveredPrice(null)
+    const handleChartLeave = (e) => {
+        e.preventDefault()
+        if (!isDragging && hoverLineRef.current && hoverInfoRef.current) {
+            hoveredPriceRef.current = null
+            hoverLineRef.current.style.opacity = '0'
+            hoverInfoRef.current.innerHTML = '<span class="muted">drag on chart to see P/L</span>'
         }
     }
 
@@ -429,6 +482,21 @@ function ProfitEstimator({ option, currentPrice, onClose, onNavigate }) {
                     </h2>
                     <span className="expiry-info">{option.expiry} ({option.daysToExpiry}d)</span>
                 </div>
+                <div className="refresh-group">
+                    <button
+                        className="refresh-btn"
+                        onClick={refreshPrice}
+                        disabled={refreshing}
+                        title="Refresh price data"
+                    >
+                        ↻ Refresh
+                    </button>
+                    {lastRefresh && (
+                        <span className="last-refresh">
+                            {lastRefresh.toLocaleTimeString()}
+                        </span>
+                    )}
+                </div>
             </div>
 
             <div className="estimator-content">
@@ -446,7 +514,7 @@ function ProfitEstimator({ option, currentPrice, onClose, onNavigate }) {
                         </div>
                         <div className="stat-box">
                             <span className="stat-label">current</span>
-                            <span className="stat-value">${currentPrice?.toFixed(2) || '-'}</span>
+                            <span className="stat-value">${liveCurrentPrice?.toFixed(2) || '-'}</span>
                         </div>
                         <div className="stat-box">
                             <span className="stat-label">max loss</span>
@@ -471,7 +539,7 @@ function ProfitEstimator({ option, currentPrice, onClose, onNavigate }) {
                     {/* Time Slider */}
                     <div className="time-slider">
                         <div className="time-header">
-                            <label>sell in <strong>{formatTime(hoursToSell)}</strong></label>
+                            <label>sell in <strong>{formatTime(hoursToSell)}</strong> <span className="tz-label">PT</span></label>
                             <span className="time-hint">
                                 {hoursToSell <= TRADING_HOURS_PER_DAY / 2 ? 'morning' :
                                     hoursToSell <= TRADING_HOURS_PER_DAY ? 'end of day' :
@@ -514,21 +582,22 @@ function ProfitEstimator({ option, currentPrice, onClose, onNavigate }) {
                                     style={{ bottom: `${(maxY - maxLoss) / (maxY * 2) * 100}%` }}
                                 />
 
-                                {/* Hover price marker */}
-                                {hoveredPrice && chartData.length > 0 && (
-                                    <div
-                                        className="marker-line hover"
-                                        style={{
-                                            left: `${((hoveredPrice - chartData[0]?.stockPrice) / (chartData[chartData.length - 1]?.stockPrice - chartData[0]?.stockPrice)) * 100}%`
-                                        }}
-                                    />
-                                )}
+                                {/* Hover price marker - controlled by ref */}
+                                <div
+                                    ref={hoverLineRef}
+                                    className="marker-line hover"
+                                    style={{
+                                        left: '50%',
+                                        opacity: 0,
+                                        pointerEvents: 'none'
+                                    }}
+                                />
 
                                 {/* Current price marker */}
                                 <div
                                     className="marker-line current"
                                     style={{
-                                        left: `${((currentPrice - chartData[0]?.stockPrice) / (chartData[chartData.length - 1]?.stockPrice - chartData[0]?.stockPrice)) * 100}%`
+                                        left: `${((liveCurrentPrice - chartData[0]?.stockPrice) / (chartData[chartData.length - 1]?.stockPrice - chartData[0]?.stockPrice)) * 100}%`
                                     }}
                                 >
                                     <span className="marker-label">now</span>
@@ -581,7 +650,7 @@ function ProfitEstimator({ option, currentPrice, onClose, onNavigate }) {
                             {dayLow && dayLow >= chartData[0]?.stockPrice && dayLow <= chartData[chartData.length - 1]?.stockPrice && (
                                 <span className="x-label-low">${dayLow.toFixed(0)} <small>low</small></span>
                             )}
-                            <span>${currentPrice?.toFixed(0)}</span>
+                            <span>${liveCurrentPrice?.toFixed(0)}</span>
                             {dayHigh && dayHigh >= chartData[0]?.stockPrice && dayHigh <= chartData[chartData.length - 1]?.stockPrice && (
                                 <span className="x-label-high">${dayHigh.toFixed(0)} <small>high</small></span>
                             )}
@@ -602,19 +671,8 @@ function ProfitEstimator({ option, currentPrice, onClose, onNavigate }) {
                                 )}
                             </div>
                         )}
-                        <div className="chart-hover-info">
-                            {hoveredProfit ? (
-                                <>
-                                    <strong>${hoveredProfit.price.toFixed(2)}</strong>
-                                    {' → '}
-                                    <strong className={hoveredProfit.profit >= 0 ? 'profit' : 'loss'}>
-                                        {hoveredProfit.profit >= 0 ? '+' : ''}${hoveredProfit.profit.toFixed(0)}
-                                        {' ('}{hoveredProfit.profit >= 0 ? '+' : ''}{((hoveredProfit.profit / entryCost) * 100).toFixed(0)}%{')'}
-                                    </strong>
-                                </>
-                            ) : (
-                                <span className="muted">drag on chart to see P/L</span>
-                            )}
+                        <div className="chart-hover-info" ref={hoverInfoRef}>
+                            <span className="muted">drag on chart to see P/L</span>
                         </div>
                     </div>
                     {/* Option History Chart */}
@@ -626,6 +684,15 @@ function ProfitEstimator({ option, currentPrice, onClose, onNavigate }) {
                             embedded={true}
                         />
                     </div>
+                    {/* Stock Price Chart */}
+                    {option.ticker && (
+                        <div className="history-section">
+                            <h3>{option.ticker} stock chart</h3>
+                            <div className="embedded-stock-chart">
+                                <StockChart ticker={option.ticker} strikes={[option.strike]} defaultPeriod="1m" />
+                            </div>
+                        </div>
+                    )}
                 </div>
             </div>
         </div>

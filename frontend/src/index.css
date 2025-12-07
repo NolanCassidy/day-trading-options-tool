@@ -69,6 +69,106 @@ body {
   align-items: center;
 }
 
+/* Manual Refresh Button */
+.refresh-group {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 4px 4px 4px 12px;
+}
+
+.refresh-btn {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  background: linear-gradient(135deg, var(--blue), #1e88e5);
+  border: none;
+  color: white;
+  padding: 6px 14px;
+  border-radius: 4px;
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.refresh-btn:hover {
+  background: linear-gradient(135deg, #1e88e5, var(--blue));
+  transform: translateY(-1px);
+  box-shadow: 0 2px 8px rgba(33, 150, 243, 0.3);
+}
+
+.refresh-btn:active {
+  transform: translateY(0);
+}
+
+.refresh-btn:disabled {
+  opacity: 0.7;
+  cursor: not-allowed;
+  transform: none;
+}
+
+.refresh-btn:disabled::before {
+  content: '';
+  display: inline-block;
+  animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+  from {
+    transform: rotate(0deg);
+  }
+
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.last-refresh {
+  font-size: 10px;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.last-refresh::before {
+  content: '⏱ ';
+  opacity: 0.6;
+}
+
+/* Price Flash Animation */
+.quote-price.flash-up {
+  animation: flash-green 0.5s ease-out;
+}
+
+.quote-price.flash-down {
+  animation: flash-red 0.5s ease-out;
+}
+
+@keyframes flash-green {
+  0% {
+    background: rgba(0, 210, 106, 0.4);
+  }
+
+  100% {
+    background: transparent;
+  }
+}
+
+@keyframes flash-red {
+  0% {
+    background: rgba(255, 71, 87, 0.4);
+  }
+
+  100% {
+    background: transparent;
+  }
+}
+
 /* Buttons */
 .scan-btn {
   background: var(--bg-card);
@@ -562,7 +662,11 @@ body {
   background: var(--bg-primary);
   z-index: 1000;
   overflow-y: auto;
+  overflow-x: hidden;
   padding: 20px;
+  overscroll-behavior: contain;
+  overflow-anchor: none;
+  contain: layout style;
 }
 
 .estimator-header {
@@ -915,6 +1019,7 @@ body {
 .history-section {
   border-top: 1px solid var(--border);
   padding-top: 16px;
+  margin-top: 16px;
 }
 
 .history-section h3 {
@@ -924,6 +1029,12 @@ body {
   color: var(--text-muted);
   text-transform: uppercase;
   letter-spacing: 0.5px;
+}
+
+.embedded-stock-chart {
+  background: var(--bg-card);
+  border-radius: var(--radius);
+  overflow: hidden;
 }
 
 .history-view.embedded {
@@ -1059,9 +1170,20 @@ body {
   border-radius: var(--radius);
 }
 
+.tz-label {
+  font-size: 9px;
+  color: var(--text-muted);
+  background: var(--bg-primary);
+  padding: 1px 4px;
+  border-radius: 2px;
+  margin-left: 4px;
+  font-weight: 500;
+}
+
 /* Chart section */
 .chart-section {
   margin-bottom: 20px;
+  contain: layout style;
 }
 
 .chart-hint {
@@ -1073,6 +1195,8 @@ body {
 
 .chart {
   cursor: crosshair;
+  contain: strict;
+  will-change: transform;
 }
 
 /* Chart markers */

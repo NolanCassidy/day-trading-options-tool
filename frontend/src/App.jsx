@@ -10,11 +10,17 @@ const API_BASE = 'http://localhost:8000'
 const getInitialState = () => {
   const hash = window.location.hash.slice(1) // Remove #
   if (hash.startsWith('scan')) {
-    return { view: 'scan', ticker: '' }
+    return { view: 'scan', ticker: '', option: null }
+  } else if (hash.startsWith('option/')) {
+    // Format: option/TICKER/CONTRACTSYMBOL
+    const parts = hash.replace('option/', '').split('/')
+    const ticker = parts[0]?.toUpperCase() || ''
+    const contractSymbol = parts[1] || ''
+    return { view: 'option', ticker, contractSymbol }
   } else if (hash.startsWith('stock/')) {
-    return { view: 'stock', ticker: hash.replace('stock/', '').toUpperCase() }
+    return { view: 'stock', ticker: hash.replace('stock/', '').toUpperCase(), option: null }
   }
-  return { view: 'home', ticker: '' }
+  return { view: 'home', ticker: '', option: null }
 }
 
 function App() {
@@ -51,6 +57,28 @@ function App() {
   useEffect(() => {
     if (initialState.view === 'scan') {
       handleScan()
+    } else if (initialState.view === 'option' && initialState.ticker && initialState.contractSymbol) {
+      // Load option from URL - first load the stock, then select the option
+      setTicker(initialState.ticker)
+      handleSearch(null, initialState.ticker).then(() => {
+        // Try to find and select the option by contract symbol
+        const loadOption = async () => {
+          try {
+            const res = await fetch(`${API_BASE}/api/options/${initialState.ticker}`)
+            if (res.ok) {
+              const data = await res.json()
+              const allOptions = [...(data.calls || []), ...(data.puts || [])]
+              const opt = allOptions.find(o => o.contractSymbol === initialState.contractSymbol)
+              if (opt) {
+                handleOptionClick(opt, opt.contractSymbol.includes('C') ? 'CALL' : 'PUT')
+              }
+            }
+          } catch (e) {
+            console.error('Failed to load option from URL:', e)
+          }
+        }
+        loadOption()
+      })
     } else if (initialState.view === 'stock' && initialState.ticker) {
       setTicker(initialState.ticker)
       handleSearch(null, initialState.ticker)
@@ -58,9 +86,11 @@ function App() {
   }, [])
 
   // Update URL when state changes  
-  const updateURL = (view, tickerVal = '') => {
+  const updateURL = (view, tickerVal = '', contractSymbol = '') => {
     if (view === 'scan') {
       window.history.replaceState(null, '', '#scan')
+    } else if (view === 'option' && tickerVal && contractSymbol) {
+      window.history.replaceState(null, '', `#option/${tickerVal}/${contractSymbol}`)
     } else if (view === 'stock' && tickerVal) {
       window.history.replaceState(null, '', `#stock/${tickerVal}`)
     } else {
@@ -68,7 +98,49 @@ function App() {
     }
   }
 
-  // Auto-refresh effect
+  // Manual refresh state
+  const [lastQuoteRefresh, setLastQuoteRefresh] = useState(null)
+  const [priceFlash, setPriceFlash] = useState(null) // 'up' | 'down' | null
+  const [refreshing, setRefreshing] = useState(false)
+  const prevPriceRef = React.useRef(null)
+
+  // Manual quote refresh function
+  const refreshQuote = async () => {
+    if (!searchTicker || refreshing) return
+    setRefreshing(true)
+    try {
+      const res = await fetch(`${API_BASE}/api/quote-lite/${searchTicker}`)
+      if (res.ok) {
+        const data = await res.json()
+        if (!data.error && data.price) {
+          // Detect price change direction
+          if (prevPriceRef.current !== null && data.price !== prevPriceRef.current) {
+            setPriceFlash(data.price > prevPriceRef.current ? 'up' : 'down')
+            setTimeout(() => setPriceFlash(null), 500)
+          }
+          prevPriceRef.current = data.price
+
+          // Update quote with new price
+          setQuote(prev => prev ? {
+            ...prev,
+            price: data.price,
+            change: data.change,
+            changePercent: data.changePercent,
+            dayHigh: data.dayHigh,
+            dayLow: data.dayLow
+          } : prev)
+
+          setLastQuoteRefresh(new Date())
+        }
+      }
+    } catch (e) {
+      console.error('Quote refresh failed:', e)
+    } finally {
+      setRefreshing(false)
+    }
+  }
+
+  // Auto-refresh effect (scan results)
   React.useEffect(() => {
     if (!autoRefresh || !scanResults) return
     const interval = setInterval(() => {
@@ -240,6 +312,11 @@ function App() {
       type: optType,
       currentPrice: stockPrice
     })
+
+    // Update URL for persistence
+    if (opt.contractSymbol) {
+      updateURL('option', tickerSymbol, opt.contractSymbol)
+    }
   }
 
   const formatNumber = (num) => {
@@ -268,6 +345,25 @@ function App() {
         </div>
 
         <div className="header-actions">
+          {/* Manual Refresh Button */}
+          {searchTicker && !scanResults && (
+            <div className="refresh-group">
+              <button
+                className="refresh-btn"
+                onClick={refreshQuote}
+                disabled={refreshing}
+                title="Refresh price data"
+              >
+                {refreshing ? '↻' : '↻'} Refresh
+              </button>
+              {lastQuoteRefresh && (
+                <span className="last-refresh">
+                  {lastQuoteRefresh.toLocaleTimeString()}
+                </span>
+              )}
+            </div>
+          )}
+
           {/* AI Advisor Button */}
           {scanResults && (
             <button
@@ -478,11 +574,15 @@ function App() {
         <div className="quote-card">
           <div className="quote-header">
             <div>
-              <div className="quote-symbol">{quote.symbol}</div>
+              <div className="quote-symbol">
+                {quote.symbol}
+              </div>
               <div className="quote-name">{quote.name}</div>
             </div>
             <div className="quote-price-container">
-              <div className="quote-price">{formatPrice(quote.price)}</div>
+              <div className={`quote-price ${priceFlash ? `flash-${priceFlash}` : ''}`}>
+                {formatPrice(quote.price)}
+              </div>
               {quote.change !== undefined && (
                 <div className={`quote-change ${quote.change >= 0 ? 'positive' : 'negative'}`}>
                   {quote.change >= 0 ? '▲' : '▼'} {formatPrice(Math.abs(quote.change))} ({quote.changePercent >= 0 ? '+' : ''}{quote.changePercent}%)
@@ -733,8 +833,18 @@ function App() {
       {selectedOption && (
         <ProfitEstimator
           option={selectedOption}
-          currentPrice={selectedOption.currentPrice || quote?.price || selectedOption.strike}
-          onClose={() => setSelectedOption(null)}
+          currentPrice={quote?.price || selectedOption.currentPrice || selectedOption.strike}
+          onClose={() => {
+            setSelectedOption(null)
+            // Restore previous URL
+            if (searchTicker) {
+              updateURL('stock', searchTicker)
+            } else if (scanResults) {
+              updateURL('scan')
+            } else {
+              updateURL('home')
+            }
+          }}
           onNavigate={(ticker) => {
             setTicker(ticker)
             handleSearch(null, ticker)

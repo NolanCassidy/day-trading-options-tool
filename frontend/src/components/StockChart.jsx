@@ -3,10 +3,10 @@ import { createChart, CandlestickSeries, LineSeries, HistogramSeries } from 'lig
 
 const API_BASE = 'http://localhost:8000'
 
-function StockChart({ ticker, strikes = [] }) {
+function StockChart({ ticker, strikes = [], defaultPeriod = '3mo' }) {
     const chartContainerRef = useRef(null)
     const chartRef = useRef(null)
-    const [period, setPeriod] = useState('3mo')
+    const [period, setPeriod] = useState(defaultPeriod)
     const [data, setData] = useState(null)
     const [loading, setLoading] = useState(false)
     const [error, setError] = useState(null)

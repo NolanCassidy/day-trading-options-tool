@@ -9,7 +9,7 @@ from pydantic import BaseModel
 from services.options import (
     get_stock_quote, get_options_chain, get_top_volume_options, 
     scan_market_options, get_stock_history, detect_unusual_activity,
-    get_ai_recommendation, get_option_history
+    get_ai_recommendation, get_option_history, get_quote_lite
 )
 
 app = FastAPI(
@@ -38,6 +38,16 @@ async def quote(ticker: str):
     """Get current stock quote"""
     try:
         data = get_stock_quote(ticker.upper())
+        return data
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Error fetching quote for {ticker}: {str(e)}")
+
+
+@app.get("/api/quote-lite/{ticker}")
+async def quote_lite(ticker: str):
+    """Lightweight quote for live updates - fast price data only"""
+    try:
+        data = get_quote_lite(ticker.upper())
         return data
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Error fetching quote for {ticker}: {str(e)}")
