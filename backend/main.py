@@ -1,6 +1,8 @@
 """
 FastAPI backend for Options Trading Dashboard
 """
+import os
+
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from typing import Optional
@@ -19,9 +21,16 @@ app = FastAPI(
 )
 
 # Enable CORS for frontend
+allowed_origins = {"http://localhost:5173", "http://127.0.0.1:5173"}
+
+# Include Vercel-provided domain or a custom frontend origin when available
+for origin in [os.getenv("VERCEL_URL"), os.getenv("FRONTEND_ORIGIN")]:
+    if origin:
+        allowed_origins.add(origin if origin.startswith("http") else f"https://{origin}")
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],
+    allow_origins=list(allowed_origins),
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

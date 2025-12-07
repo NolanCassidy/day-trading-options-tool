@@ -1,0 +1,10 @@
+{
+  "builds": [
+    { "src": "backend/main.py", "use": "@vercel/python" },
+    { "src": "frontend/vite.config.js", "use": "@vercel/static-build", "config": { "distDir": "frontend/dist" } }
+  ],
+  "routes": [
+    { "src": "/api/(.*)", "dest": "/backend/main.py" },
+    { "src": "/(.*)", "dest": "/frontend/dist/$1" }
+  ]
+}
