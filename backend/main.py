@@ -9,7 +9,7 @@ from pydantic import BaseModel
 from services.options import (
     get_stock_quote, get_options_chain, get_top_volume_options, 
     scan_market_options, get_stock_history, detect_unusual_activity,
-    get_ai_recommendation
+    get_ai_recommendation, get_option_history
 )
 
 app = FastAPI(
@@ -92,6 +92,15 @@ async def unusual_activity(ticker: str):
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Error detecting unusual activity for {ticker}: {str(e)}")
 
+
+@app.get("/api/option-history/{contract_symbol}")
+async def option_history(contract_symbol: str, period: str = "1mo", interval: str = "1d"):
+    """Get historical prices for a specific option contract"""
+    try:
+        data = get_option_history(contract_symbol, period, interval)
+        return data
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Error fetching option history: {str(e)}")
 
 class AIRecommendRequest(BaseModel):
     topCalls: list = []

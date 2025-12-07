@@ -1,4 +1,5 @@
-import { useState, useMemo } from 'react'
+import { useState, useMemo, useEffect, useRef } from 'react'
+import { createChart, AreaSeries } from 'lightweight-charts'
 
 /**
  * Proper Black-Scholes option pricing approximation
@@ -64,6 +65,148 @@ function estimateOptionValue(optionType, strike, stockPrice, hoursToExpiry, iv, 
 // Convert days to trading hours (6.5 hours per trading day)
 const TRADING_HOURS_PER_DAY = 6.5
 
+const API_BASE = 'http://localhost:8000'
+
+function OptionHistoryChart({ contractSymbol, onBack, embedded = false }) {
+    const chartContainerRef = useRef(null)
+    const chartRef = useRef(null)
+    const [period, setPeriod] = useState('5d')
+    const [loading, setLoading] = useState(false)
+    const [error, setError] = useState(null)
+    const [candles, setCandles] = useState([])
+
+    useEffect(() => {
+        const fetchHistory = async () => {
+            setLoading(true)
+            setError(null)
+            try {
+                // yfinance: 1m works for up to 7 days, 2m for up to 60 days
+                // IMPORTANT: period='1d' returns NO DATA for options, so use 5d as minimum
+                let yfPeriod = '5d'  // Always fetch at least 5d
+                let interval = '1m'
+
+                if (period === '1mo') {
+                    yfPeriod = '1mo'
+                    interval = '2m'
+                } else if (period === '3mo') {
+                    yfPeriod = '3mo'
+                    interval = '2m'
+                }
+
+                const res = await fetch(`${API_BASE}/api/option-history/${contractSymbol}?period=${yfPeriod}&interval=${interval}`)
+                const json = await res.json()
+
+                if (json.error || !json.candles || json.candles.length === 0) {
+                    setError(json.error || 'No data available')
+                    setCandles([])
+                } else {
+                    let data = json.candles
+
+                    // Filter for custom periods (1h, 4h, 1d) since we fetch 5d minimum
+                    if (data.length > 0) {
+                        const lastTime = data[data.length - 1].time
+                        if (period === '1h') {
+                            data = data.filter(c => c.time >= lastTime - 3600)
+                        } else if (period === '4h') {
+                            data = data.filter(c => c.time >= lastTime - 14400)
+                        } else if (period === '1d') {
+                            data = data.filter(c => c.time >= lastTime - 86400)
+                        }
+                    }
+
+                    setCandles(data)
+                }
+            } catch (e) {
+                console.error(e)
+                setError('Failed to load history')
+            } finally {
+                setLoading(false)
+            }
+        }
+
+        if (contractSymbol) fetchHistory()
+    }, [contractSymbol, period])
+
+    useEffect(() => {
+        if (!chartContainerRef.current || candles.length === 0) return
+
+        const handleResize = () => {
+            if (chartRef.current && chartContainerRef.current) {
+                chartRef.current.applyOptions({ width: chartContainerRef.current.clientWidth })
+            }
+        }
+
+        if (chartRef.current) {
+            chartRef.current.remove()
+        }
+
+        const chart = createChart(chartContainerRef.current, {
+            layout: { background: { color: 'transparent' }, textColor: '#ccc' },
+            grid: { vertLines: { color: '#333' }, horzLines: { color: '#333' } },
+            width: chartContainerRef.current.clientWidth,
+            height: embedded ? 180 : 250,
+            timeScale: {
+                timeVisible: true,
+                borderColor: '#444',
+                // Format time better for intraday
+                tickMarkFormatter: (time, tickMarkType, locale) => {
+                    const date = new Date(time * 1000)
+                    if (period === '1d') return date.toLocaleTimeString(locale, { hour: 'numeric', minute: 'numeric' })
+                    if (period === '5d') return date.toLocaleDateString(locale, { weekday: 'short', hour: 'numeric' })
+                    return date.toLocaleDateString(locale, { month: 'short', day: 'numeric' })
+                }
+            },
+            rightPriceScale: { borderColor: '#444' },
+        })
+        chartRef.current = chart
+
+        const series = chart.addSeries(AreaSeries, {
+            lineColor: '#2962FF',
+            topColor: 'rgba(41, 98, 255, 0.3)',
+            bottomColor: 'rgba(41, 98, 255, 0)',
+        })
+
+        series.setData(candles.map(c => ({
+            time: c.time,
+            value: c.close
+        })))
+
+        chart.timeScale().fitContent()
+
+        window.addEventListener('resize', handleResize)
+        return () => {
+            window.removeEventListener('resize', handleResize)
+            if (chartRef.current) {
+                chartRef.current.remove()
+                chartRef.current = null
+            }
+        }
+    }, [candles, period, embedded])
+
+    return (
+        <div className={`history-view ${embedded ? 'embedded' : ''}`}>
+            <div className="history-header">
+                {!embedded && <button className="back-btn" onClick={onBack}>← Back</button>}
+                <div className="tf-toggles">
+                    {['1h', '4h', '1d', '5d', '1mo'].map(p => (
+                        <button
+                            key={p}
+                            className={period === p ? 'active' : ''}
+                            onClick={() => setPeriod(p)}
+                        >
+                            {p.toUpperCase()}
+                        </button>
+                    ))}
+                </div>
+            </div>
+            <div className="history-chart-container" ref={chartContainerRef}>
+                {loading && <div className="loader">Loading...</div>}
+                {error && <div className="error">{error}</div>}
+            </div>
+        </div>
+    )
+}
+
 function ProfitEstimator({ option, currentPrice, onClose, onNavigate }) {
     const totalHours = (option.daysToExpiry || 1) * TRADING_HOURS_PER_DAY
     const [hoursToSell, setHoursToSell] = useState(Math.floor(totalHours / 2))
@@ -74,6 +217,8 @@ function ProfitEstimator({ option, currentPrice, onClose, onNavigate }) {
     const iv = option.impliedVolatility || 30
     const optionType = option.type || 'CALL'
     const strike = option.strike
+    const dayHigh = option.dayHigh || currentPrice * 1.01
+    const dayLow = option.dayLow || currentPrice * 0.99
 
     // Calculate P&L data points
     const chartData = useMemo(() => {
@@ -148,6 +293,21 @@ function ProfitEstimator({ option, currentPrice, onClose, onNavigate }) {
 
     const entryCost = entryPrice * 100
 
+    // Calculate P/L at daily high and low
+    const profitAtHigh = useMemo(() => {
+        if (!dayHigh) return null
+        const hoursRemaining = Math.max(0, totalHours - hoursToSell)
+        const val = estimateOptionValue(optionType, strike, dayHigh, hoursRemaining, iv, totalHours)
+        return (val - entryPrice) * 100
+    }, [dayHigh, optionType, strike, hoursToSell, iv, totalHours, entryPrice])
+
+    const profitAtLow = useMemo(() => {
+        if (!dayLow) return null
+        const hoursRemaining = Math.max(0, totalHours - hoursToSell)
+        const val = estimateOptionValue(optionType, strike, dayLow, hoursRemaining, iv, totalHours)
+        return (val - entryPrice) * 100
+    }, [dayLow, optionType, strike, hoursToSell, iv, totalHours, entryPrice])
+
     // Format hours to readable date/time (PT timezone, market 6:30am-1pm)
     // Format hours to readable date/time (PT timezone, market 6:30am-1pm)
     const formatTime = (hours) => {
@@ -195,12 +355,32 @@ function ProfitEstimator({ option, currentPrice, onClose, onNavigate }) {
 
         const dayName = dayNames[currentDayIdx]
 
+        // Calculate actual date
+        const targetDate = new Date()
+        let calendarDaysToAdd = 0
+        let tradingDaysRemaining = tradingDays
+
+        // Count calendar days needed to reach tradingDays trading days
+        while (tradingDaysRemaining > 0) {
+            calendarDaysToAdd++
+            const futureDay = (todayIdx + calendarDaysToAdd) % 7
+            if (futureDay !== 0 && futureDay !== 6) {
+                tradingDaysRemaining--
+            }
+        }
+        targetDate.setDate(targetDate.getDate() + calendarDaysToAdd)
+
+        const month = targetDate.getMonth() + 1
+        const day = targetDate.getDate()
+        const year = targetDate.getFullYear().toString().slice(-2)
+        const dateStr = `${month}/${day}/${year}`
+
         if (tradingDays === 0) {
-            return `today ${timeStr}`
+            return `today ${timeStr} (${dateStr})`
         } else if (tradingDays === 1) {
-            return `tomorrow ${timeStr}`
+            return `tomorrow ${timeStr} (${dateStr})`
         } else {
-            return `${dayName} ${timeStr}`
+            return `${dayName} ${timeStr} (${dateStr})`
         }
     }
 
@@ -225,191 +405,226 @@ function ProfitEstimator({ option, currentPrice, onClose, onNavigate }) {
     }
 
     return (
-        <div className="modal-overlay" onClick={onClose}>
-            <div className="profit-modal" onClick={e => e.stopPropagation()}>
-                <div className="modal-header">
-                    <div className="modal-title">
-                        <span className={`option-type ${option.type?.toLowerCase() || 'call'}`}>
-                            {option.type || 'CALL'}
-                        </span>
-                        <h2>
-                            <span
-                                className="ticker-link"
-                                onClick={() => {
-                                    if (onNavigate && option.ticker) {
-                                        onNavigate(option.ticker)
-                                        onClose()
-                                    }
-                                }}
-                                style={{ cursor: option.ticker ? 'pointer' : 'default' }}
-                            >
-                                {option.ticker || 'Option'}
-                            </span>
-                            {' '}${option.strike}
-                        </h2>
-                        <span className="modal-expiry">{option.expiry}</span>
-                    </div>
-                    <button className="close-btn" onClick={onClose}>×</button>
-                </div>
-
-                {/* Hover info shown as simple text above chart - no container to avoid resize */}
-
-                <div className="modal-stats">
-                    <div className="stat-box">
-                        <span className="stat-label">entry cost</span>
-                        <span className="stat-value">${entryCost.toFixed(0)}</span>
-                    </div>
-                    <div className="stat-box">
-                        <span className="stat-label">breakeven</span>
-                        <span className="stat-value">${breakeven.toFixed(2)}</span>
-                    </div>
-                    <div className="stat-box">
-                        <span className="stat-label">current</span>
-                        <span className="stat-value">${currentPrice?.toFixed(2) || '-'}</span>
-                    </div>
-                    <div className="stat-box">
-                        <span className="stat-label">max loss</span>
-                        <span className="stat-value loss">-${entryCost.toFixed(0)}</span>
-                    </div>
-                </div>
-
-                {/* Time Slider - Now in hours */}
-                <div className="time-slider">
-                    <div className="time-header">
-                        <label>sell in <strong>{formatTime(hoursToSell)}</strong></label>
-                        <span className="time-hint">
-                            {hoursToSell <= TRADING_HOURS_PER_DAY / 2 ? 'morning' :
-                                hoursToSell <= TRADING_HOURS_PER_DAY ? 'end of day' :
-                                    hoursToSell <= TRADING_HOURS_PER_DAY * 2 ? 'tomorrow' : 'later'}
-                        </span>
-                    </div>
-                    <input
-                        type="range"
-                        min="0.5"
-                        max={totalHours}
-                        step="0.5"
-                        value={hoursToSell}
-                        onChange={e => setHoursToSell(parseFloat(e.target.value))}
-                    />
-                    <div className="slider-labels">
-                        <span>30min</span>
-                        <span>1 day</span>
-                        <span>expiry ({option.daysToExpiry}d)</span>
-                    </div>
-                </div>
-
-                {/* Interactive P&L Chart */}
-                <div className="chart-section">
-                    <div className="chart-container">
-                        <div className="chart-y-axis">
-                            <span className="y-label profit">+${maxProfit.toFixed(0)}</span>
-                            <span className="y-label zero">$0</span>
-                            <span className="y-label loss">-${Math.abs(maxLoss).toFixed(0)}</span>
-                        </div>
-                        <div
-                            className="chart"
-                            onMouseMove={handleChartHover}
-                            onMouseLeave={handleChartLeave}
-                            onMouseDown={() => setIsDragging(true)}
-                            onMouseUp={() => setIsDragging(false)}
+        <div className="estimator-page">
+            <div className="estimator-header">
+                <button className="back-btn" onClick={onClose}>← Back to Scanner</button>
+                <div className="option-info">
+                    <span className={`option-type ${option.type?.toLowerCase() || 'call'}`}>
+                        {option.type || 'CALL'}
+                    </span>
+                    <h2>
+                        <span
+                            className="ticker-link"
+                            onClick={() => {
+                                if (onNavigate && option.ticker) {
+                                    onNavigate(option.ticker)
+                                    onClose()
+                                }
+                            }}
+                            style={{ cursor: option.ticker ? 'pointer' : 'default' }}
                         >
-                            {/* Zero line */}
-                            <div
-                                className="zero-line"
-                                style={{ bottom: `${(maxY - maxLoss) / (maxY * 2) * 100}%` }}
-                            />
+                            {option.ticker || 'Option'}
+                        </span>
+                        {' '}${option.strike}
+                    </h2>
+                    <span className="expiry-info">{option.expiry} ({option.daysToExpiry}d)</span>
+                </div>
+            </div>
 
-                            {/* Hover price marker */}
-                            {hoveredPrice && chartData.length > 0 && (
-                                <div
-                                    className="marker-line hover"
-                                    style={{
-                                        left: `${((hoveredPrice - chartData[0]?.stockPrice) / (chartData[chartData.length - 1]?.stockPrice - chartData[0]?.stockPrice)) * 100}%`
-                                    }}
-                                />
-                            )}
-
-                            {/* Current price marker */}
-                            <div
-                                className="marker-line current"
-                                style={{
-                                    left: `${((currentPrice - chartData[0]?.stockPrice) / (chartData[chartData.length - 1]?.stockPrice - chartData[0]?.stockPrice)) * 100}%`
-                                }}
-                            >
-                                <span className="marker-label">now</span>
-                            </div>
-
-                            {/* Profit/loss bars */}
-                            <div className="bars">
-                                {chartData.map((d, i) => {
-                                    const barHeight = Math.abs(d.profit) / maxY * 50
-                                    const isProfit = d.profit >= 0
-                                    return (
-                                        <div
-                                            key={i}
-                                            className={`bar ${isProfit ? 'profit' : 'loss'}`}
-                                            style={{
-                                                left: `${(i / chartData.length) * 100}%`,
-                                                width: `${100 / chartData.length}%`,
-                                                height: `${barHeight}%`,
-                                                bottom: isProfit ? '50%' : 'auto',
-                                                top: isProfit ? 'auto' : '50%'
-                                            }}
-                                        />
-                                    )
-                                })}
-                            </div>
+            <div className="estimator-content">
+                {/* Left Column - P&L Chart and Controls */}
+                <div className="estimator-main">
+                    {/* Stats Row */}
+                    <div className="modal-stats">
+                        <div className="stat-box">
+                            <span className="stat-label">entry cost</span>
+                            <span className="stat-value">${entryCost.toFixed(0)}</span>
                         </div>
-                    </div>
-                    <div className="chart-x-axis">
-                        <span>${chartData[0]?.stockPrice.toFixed(0)}</span>
-                        <span>${currentPrice?.toFixed(0)}</span>
-                        <span>${chartData[chartData.length - 1]?.stockPrice.toFixed(0)}</span>
-                    </div>
-                    <div className="chart-hover-info">
-                        {hoveredProfit ? (
-                            <>
-                                <strong>${hoveredProfit.price.toFixed(2)}</strong>
-                                {' → '}
-                                <strong className={hoveredProfit.profit >= 0 ? 'profit' : 'loss'}>
-                                    {hoveredProfit.profit >= 0 ? '+' : ''}${hoveredProfit.profit.toFixed(0)}
-                                    {' ('}{hoveredProfit.profit >= 0 ? '+' : ''}{((hoveredProfit.profit / entryCost) * 100).toFixed(0)}%{')'}
-                                </strong>
-                            </>
-                        ) : (
-                            <span className="muted">drag on chart to see P/L</span>
+                        <div className="stat-box">
+                            <span className="stat-label">breakeven</span>
+                            <span className="stat-value">${breakeven.toFixed(2)}</span>
+                        </div>
+                        <div className="stat-box">
+                            <span className="stat-label">current</span>
+                            <span className="stat-value">${currentPrice?.toFixed(2) || '-'}</span>
+                        </div>
+                        <div className="stat-box">
+                            <span className="stat-label">max loss</span>
+                            <span className="stat-value loss">-${entryCost.toFixed(0)}</span>
+                        </div>
+                        {option.reversalPct > 0 && (
+                            <div className="stat-box">
+                                <span className="stat-label">rev%</span>
+                                <span className="stat-value profit">+{option.reversalPct}%</span>
+                            </div>
+                        )}
+                        {option.riskRatio > 0 && (
+                            <div className="stat-box">
+                                <span className="stat-label">R:R</span>
+                                <span className={`stat-value ${option.riskRatio >= 2 ? 'profit' : option.riskRatio >= 1 ? '' : 'loss'}`}>
+                                    {option.riskRatio}:1
+                                </span>
+                            </div>
                         )}
                     </div>
-                </div>
-                {/* Quick scenarios */}
-                <div className="scenarios">
-                    <h3>quick scenarios</h3>
-                    <div className="scenario-grid">
-                        {[
-                            { label: '+5%', price: currentPrice * 1.05 },
-                            { label: '+10%', price: currentPrice * 1.10 },
-                            { label: '-5%', price: currentPrice * 0.95 },
-                            { label: 'breakeven', price: breakeven }
-                        ].map((s, i) => {
-                            const hoursRemaining = Math.max(0, totalHours - hoursToSell)
-                            const val = estimateOptionValue(optionType, strike, s.price, hoursRemaining, iv, totalHours)
-                            const profit = (val - entryPrice) * 100
-                            return (
+
+                    {/* Time Slider */}
+                    <div className="time-slider">
+                        <div className="time-header">
+                            <label>sell in <strong>{formatTime(hoursToSell)}</strong></label>
+                            <span className="time-hint">
+                                {hoursToSell <= TRADING_HOURS_PER_DAY / 2 ? 'morning' :
+                                    hoursToSell <= TRADING_HOURS_PER_DAY ? 'end of day' :
+                                        hoursToSell <= TRADING_HOURS_PER_DAY * 2 ? 'tomorrow' : 'later'}
+                            </span>
+                        </div>
+                        <input
+                            type="range"
+                            min="0.5"
+                            max={totalHours}
+                            step="0.5"
+                            value={hoursToSell}
+                            onChange={e => setHoursToSell(parseFloat(e.target.value))}
+                        />
+                        <div className="slider-labels">
+                            <span>30min</span>
+                            <span>1 day</span>
+                            <span>expiry ({option.daysToExpiry}d)</span>
+                        </div>
+                    </div>
+
+                    {/* Interactive P&L Chart */}
+                    <div className="chart-section">
+                        <div className="chart-container">
+                            <div className="chart-y-axis">
+                                <span className="y-label profit">+${maxProfit.toFixed(0)}</span>
+                                <span className="y-label zero">$0</span>
+                                <span className="y-label loss">-${Math.abs(maxLoss).toFixed(0)}</span>
+                            </div>
+                            <div
+                                className="chart"
+                                onMouseMove={handleChartHover}
+                                onMouseLeave={handleChartLeave}
+                                onMouseDown={() => setIsDragging(true)}
+                                onMouseUp={() => setIsDragging(false)}
+                            >
+                                {/* Zero line */}
                                 <div
-                                    key={i}
-                                    className="scenario"
-                                    onMouseEnter={() => setHoveredPrice(s.price)}
-                                    onMouseLeave={() => setHoveredPrice(null)}
+                                    className="zero-line"
+                                    style={{ bottom: `${(maxY - maxLoss) / (maxY * 2) * 100}%` }}
+                                />
+
+                                {/* Hover price marker */}
+                                {hoveredPrice && chartData.length > 0 && (
+                                    <div
+                                        className="marker-line hover"
+                                        style={{
+                                            left: `${((hoveredPrice - chartData[0]?.stockPrice) / (chartData[chartData.length - 1]?.stockPrice - chartData[0]?.stockPrice)) * 100}%`
+                                        }}
+                                    />
+                                )}
+
+                                {/* Current price marker */}
+                                <div
+                                    className="marker-line current"
+                                    style={{
+                                        left: `${((currentPrice - chartData[0]?.stockPrice) / (chartData[chartData.length - 1]?.stockPrice - chartData[0]?.stockPrice)) * 100}%`
+                                    }}
                                 >
-                                    <span className="scenario-label">{s.label}</span>
-                                    <span className="scenario-price">${s.price.toFixed(2)}</span>
-                                    <span className={`scenario-profit ${profit >= 0 ? 'profit' : 'loss'}`}>
-                                        {profit >= 0 ? '+' : ''}${profit.toFixed(0)}
-                                        <span className="profit-pct">({profit >= 0 ? '+' : ''}{((profit / entryCost) * 100).toFixed(0)}%)</span>
-                                    </span>
+                                    <span className="marker-label">now</span>
                                 </div>
-                            )
-                        })}
+
+                                {/* Daily High marker */}
+                                {dayHigh && dayHigh >= chartData[0]?.stockPrice && dayHigh <= chartData[chartData.length - 1]?.stockPrice && (
+                                    <div
+                                        className="marker-line high"
+                                        style={{
+                                            left: `${((dayHigh - chartData[0]?.stockPrice) / (chartData[chartData.length - 1]?.stockPrice - chartData[0]?.stockPrice)) * 100}%`
+                                        }}
+                                    />
+                                )}
+
+                                {/* Daily Low marker */}
+                                {dayLow && dayLow >= chartData[0]?.stockPrice && dayLow <= chartData[chartData.length - 1]?.stockPrice && (
+                                    <div
+                                        className="marker-line low"
+                                        style={{
+                                            left: `${((dayLow - chartData[0]?.stockPrice) / (chartData[chartData.length - 1]?.stockPrice - chartData[0]?.stockPrice)) * 100}%`
+                                        }}
+                                    />
+                                )}
+
+                                {/* Profit/loss bars */}
+                                <div className="bars">
+                                    {chartData.map((d, i) => {
+                                        const barHeight = Math.abs(d.profit) / maxY * 50
+                                        const isProfit = d.profit >= 0
+                                        return (
+                                            <div
+                                                key={i}
+                                                className={`bar ${isProfit ? 'profit' : 'loss'}`}
+                                                style={{
+                                                    left: `${(i / chartData.length) * 100}%`,
+                                                    width: `${100 / chartData.length}%`,
+                                                    height: `${barHeight}%`,
+                                                    bottom: isProfit ? '50%' : 'auto',
+                                                    top: isProfit ? 'auto' : '50%'
+                                                }}
+                                            />
+                                        )
+                                    })}
+                                </div>
+                            </div>
+                        </div>
+                        <div className="chart-x-axis">
+                            <span>${chartData[0]?.stockPrice.toFixed(0)}</span>
+                            {dayLow && dayLow >= chartData[0]?.stockPrice && dayLow <= chartData[chartData.length - 1]?.stockPrice && (
+                                <span className="x-label-low">${dayLow.toFixed(0)} <small>low</small></span>
+                            )}
+                            <span>${currentPrice?.toFixed(0)}</span>
+                            {dayHigh && dayHigh >= chartData[0]?.stockPrice && dayHigh <= chartData[chartData.length - 1]?.stockPrice && (
+                                <span className="x-label-high">${dayHigh.toFixed(0)} <small>high</small></span>
+                            )}
+                            <span>${chartData[chartData.length - 1]?.stockPrice.toFixed(0)}</span>
+                        </div>
+                        {/* Y-axis labels for high/low P/L */}
+                        {(profitAtHigh !== null || profitAtLow !== null) && (
+                            <div className="high-low-pnl">
+                                {profitAtLow !== null && (
+                                    <span className={profitAtLow >= 0 ? 'profit' : 'loss'}>
+                                        @ low: {profitAtLow >= 0 ? '+' : ''}${profitAtLow.toFixed(0)}
+                                    </span>
+                                )}
+                                {profitAtHigh !== null && (
+                                    <span className={profitAtHigh >= 0 ? 'profit' : 'loss'}>
+                                        @ high: {profitAtHigh >= 0 ? '+' : ''}${profitAtHigh.toFixed(0)}
+                                    </span>
+                                )}
+                            </div>
+                        )}
+                        <div className="chart-hover-info">
+                            {hoveredProfit ? (
+                                <>
+                                    <strong>${hoveredProfit.price.toFixed(2)}</strong>
+                                    {' → '}
+                                    <strong className={hoveredProfit.profit >= 0 ? 'profit' : 'loss'}>
+                                        {hoveredProfit.profit >= 0 ? '+' : ''}${hoveredProfit.profit.toFixed(0)}
+                                        {' ('}{hoveredProfit.profit >= 0 ? '+' : ''}{((hoveredProfit.profit / entryCost) * 100).toFixed(0)}%{')'}
+                                    </strong>
+                                </>
+                            ) : (
+                                <span className="muted">drag on chart to see P/L</span>
+                            )}
+                        </div>
+                    </div>
+                    {/* Option History Chart */}
+                    <div className="history-section">
+                        <h3>option price history</h3>
+                        <OptionHistoryChart
+                            contractSymbol={option.contractSymbol}
+                            onBack={() => { }}
+                            embedded={true}
+                        />
                     </div>
                 </div>
             </div>

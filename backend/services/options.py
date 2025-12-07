@@ -428,6 +428,32 @@ def get_top_volume_options(ticker: str, top_n: int = 10) -> dict:
                 reversal_profit = round(price_move * abs(greeks['delta']) * 100, 2)  # Per contract
                 reversal_pct = round((price_move * abs(greeks['delta']) / mid_price * 100), 1) if mid_price > 0 else 0
         
+        # Calculate risk/reward ratio (potential gain at high vs loss at low for CALL)
+        # For CALL: gain if stock goes to high, loss if stock goes to low
+        # For PUT: gain if stock goes to low, loss if stock goes to high
+        risk_ratio = 0
+        if current_price and day_high and day_low and greeks['delta'] and mid_price > 0:
+            if option_type == 'CALL':
+                # Upside: stock goes to day high
+                upside_move = max(0, day_high - current_price)
+                upside_pct = round((upside_move * abs(greeks['delta']) / mid_price * 100), 1)
+                # Downside: stock goes to day low
+                downside_move = max(0, current_price - day_low)
+                downside_pct = round((downside_move * abs(greeks['delta']) / mid_price * 100), 1)
+                # Risk ratio = potential reward / potential risk
+                if downside_pct > 0:
+                    risk_ratio = round(upside_pct / downside_pct, 2)
+            elif option_type == 'PUT':
+                # Upside: stock goes to day low
+                upside_move = max(0, current_price - day_low)
+                upside_pct = round((upside_move * abs(greeks['delta']) / mid_price * 100), 1)
+                # Downside: stock goes to day high
+                downside_move = max(0, day_high - current_price)
+                downside_pct = round((downside_move * abs(greeks['delta']) / mid_price * 100), 1)
+                # Risk ratio = potential reward / potential risk
+                if downside_pct > 0:
+                    risk_ratio = round(upside_pct / downside_pct, 2)
+        
         return {
             "type": option_type,
             "strike": strike,
@@ -451,7 +477,9 @@ def get_top_volume_options(ticker: str, top_n: int = 10) -> dict:
             "scalpScore": scalp_score,
             # Reversal profit
             "reversalProfit": reversal_profit,
-            "reversalPct": reversal_pct
+            "reversalPct": reversal_pct,
+            # Risk/Reward ratio
+            "riskRatio": risk_ratio
         }
     
     # Sort by volume and get top N
@@ -819,7 +847,85 @@ def get_multi_timeframe_technicals(ticker: str) -> dict:
         except Exception as e:
             results[tf] = {"error": str(e)}
             
+    
     return results
+
+
+def get_option_history(contract_symbol: str, period: str = "1mo", interval: str = "1d") -> dict:
+    """
+    Get historical price data for a specific option contract.
+    Note: Intraday data for options is often unavailable or delayed on free tiers.
+    """
+    import io
+    import contextlib
+    
+    try:
+        # Suppress yfinance print statements by redirecting stdout/stderr
+        with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+            # Prioritize Ticker.history for single symbol to reduce noise and overhead
+            tick = yf.Ticker(contract_symbol)
+            try:
+                data = tick.history(period=period, interval=interval)
+            except Exception:
+                data = pd.DataFrame()
+
+            if data.empty:
+                # Fallback to download (sometimes works when Ticker fails)
+                data = yf.download(contract_symbol, period=period, interval=interval, 
+                                 progress=False, auto_adjust=True, threads=False)
+            
+        if data.empty:
+            # Return specific error to frontend so it can show a helpful message
+            error_msg = f"No data found for {contract_symbol}"
+            if interval in ['15m', '60m', '90m', '1h']:
+                error_msg = "Intraday option data unavailable (Free Tier Limit)"
+            return {"error": error_msg, "candles": []}
+            
+        candles = []
+        for idx, row in data.iterrows():
+            # Handle MultiIndex columns if present (new yfinance behavior)
+            if isinstance(data.columns, pd.MultiIndex):
+                # Flatten or access specific level. For single ticker download, 
+                # yfinance might return (Price, Ticker) columns.
+                # Assuming single ticker, we can try to access by column name directly matches
+                # But safer to just look at values if we know the structure
+                
+                # Check if 'Close' is a tuple
+                close_val = row['Close'].iloc[0] if isinstance(row['Close'], pd.Series) else row['Close']
+                open_val = row['Open'].iloc[0] if isinstance(row['Open'], pd.Series) else row['Open']
+                high_val = row['High'].iloc[0] if isinstance(row['High'], pd.Series) else row['High']
+                low_val = row['Low'].iloc[0] if isinstance(row['Low'], pd.Series) else row['Low']
+                vol_val = row['Volume'].iloc[0] if isinstance(row['Volume'], pd.Series) else row['Volume']
+            else:
+                close_val = row['Close']
+                open_val = row['Open']
+                high_val = row['High']
+                low_val = row['Low']
+                vol_val = row.get('Volume', 0)
+
+            # Ensure values are floats/ints (handle weird numpy types)
+            timestamp = int(idx.timestamp())
+            
+            # Handle NaN
+            if pd.isna(close_val): continue
+            
+            candles.append({
+                "time": timestamp,
+                "open": round(float(open_val), 2),
+                "high": round(float(high_val), 2),
+                "low": round(float(low_val), 2),
+                "close": round(float(close_val), 2),
+                "volume": int(vol_val) if not pd.isna(vol_val) else 0
+            })
+            
+        return {
+            "symbol": contract_symbol,
+            "period": period,
+            "interval": interval,
+            "candles": candles
+        }
+    except Exception as e:
+        return {"error": str(e), "symbol": contract_symbol}
 
 
 def get_ai_recommendation(options_data: dict, market_context: dict = None) -> dict:
@@ -872,9 +978,11 @@ def get_ai_recommendation(options_data: dict, market_context: dict = None) -> di
         ai_puts = filtered_puts[:10]
 
         if not ai_calls and not ai_puts:
-             # Last resort fallback
-             ai_calls = raw_calls[:5]
-             ai_puts = raw_puts[:5]
+            # Last resort fallback
+            ai_calls = raw_calls[:5]
+            ai_puts = raw_puts[:5]
+        
+        if not ai_calls and not ai_puts:
             return {"error": "No options data to analyze"}
         
         print(f"[AI] GEMINI_AVAILABLE = {GEMINI_AVAILABLE}")

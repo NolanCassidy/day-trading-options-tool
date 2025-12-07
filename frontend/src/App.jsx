@@ -426,6 +426,7 @@ function App() {
                     <th>γ</th>
                     <th>Score</th>
                     <th>Rev%</th>
+                    <th>R:R</th>
                     <th>Spread</th>
                     <th>Vol</th>
                     <th>IV</th>
@@ -452,6 +453,9 @@ function App() {
                       </td>
                       <td className={opt.reversalPct >= 20 ? 'reversal-hot' : opt.reversalPct >= 10 ? 'reversal-good' : ''}>
                         {opt.reversalPct > 0 ? `+${opt.reversalPct}%` : '-'}
+                      </td>
+                      <td className={opt.riskRatio >= 2 ? 'rr-good' : opt.riskRatio >= 1 ? 'rr-ok' : 'rr-bad'}>
+                        {opt.riskRatio > 0 ? `${opt.riskRatio}:1` : '-'}
                       </td>
                       <td className={opt.spread > 0.10 ? 'spread-wide' : 'spread-tight'}>
                         {formatPrice(opt.spread)}
@@ -544,11 +548,12 @@ function App() {
                   <th>Last</th>
                   <th>Bid</th>
                   <th>Ask</th>
+                  <th>Rev%</th>
+                  <th>R:R</th>
                   <th>Spread</th>
                   <th>Volume</th>
                   <th>Open Int</th>
                   <th>IV</th>
-                  <th>ITM</th>
                 </tr>
               </thead>
               <tbody>
@@ -558,6 +563,12 @@ function App() {
                     <td>{formatPrice(opt.lastPrice)}</td>
                     <td>{formatPrice(opt.bid)}</td>
                     <td>{formatPrice(opt.ask)}</td>
+                    <td className={opt.reversalPct >= 20 ? 'reversal-hot' : opt.reversalPct >= 10 ? 'reversal-good' : ''}>
+                      {opt.reversalPct > 0 ? `+${opt.reversalPct}%` : '-'}
+                    </td>
+                    <td className={opt.riskRatio >= 2 ? 'rr-good' : opt.riskRatio >= 1 ? 'rr-ok' : 'rr-bad'}>
+                      {opt.riskRatio > 0 ? `${opt.riskRatio}:1` : '-'}
+                    </td>
                     <td className={opt.spread > 0.10 ? 'spread-wide' : 'spread-tight'}>
                       {formatPrice(opt.spread)}
                     </td>
@@ -566,7 +577,6 @@ function App() {
                     <td className={opt.impliedVolatility > 50 ? 'iv-high' : ''}>
                       {opt.impliedVolatility}%
                     </td>
-                    <td>{opt.inTheMoney ? '✓' : ''}</td>
                   </tr>
                 ))}
               </tbody>
@@ -682,6 +692,7 @@ function App() {
                   <th>Bid</th>
                   <th>Ask</th>
                   <th>Rev%</th>
+                  <th>R:R</th>
                   <th>Change</th>
                   <th>Volume</th>
                   <th>Open Int</th>
@@ -699,6 +710,9 @@ function App() {
                     <td>{formatPrice(opt.ask)}</td>
                     <td className={opt.reversalPct >= 20 ? 'reversal-hot' : opt.reversalPct >= 10 ? 'reversal-good' : ''}>
                       {opt.reversalPct > 0 ? `+${opt.reversalPct}%` : '-'}
+                    </td>
+                    <td className={opt.riskRatio >= 2 ? 'rr-good' : opt.riskRatio >= 1 ? 'rr-ok' : 'rr-bad'}>
+                      {opt.riskRatio > 0 ? `${opt.riskRatio}:1` : '-'}
                     </td>
                     <td className={opt.change >= 0 ? 'price-positive' : 'price-negative'}>
                       {opt.change >= 0 ? '+' : ''}{opt.change?.toFixed(2) || '-'}
