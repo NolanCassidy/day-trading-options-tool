@@ -9,7 +9,6 @@ import pandas as pd
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from functools import lru_cache
 import math
-from scipy.stats import norm
 import os
 
 # Gemini AI setup
@@ -65,19 +64,19 @@ def calculate_greeks(stock_price: float, strike: float, time_to_expiry: float,
         d2 = d1 - sigma * math.sqrt(T)
         
         # Standard normal PDF and CDF
-        n_d1 = norm.cdf(d1)
-        n_d2 = norm.cdf(d2)
-        n_prime_d1 = norm.pdf(d1)
+        n_d1 = _standard_normal_cdf(d1)
+        n_d2 = _standard_normal_cdf(d2)
+        n_prime_d1 = _standard_normal_pdf(d1)
         
         # Greeks
         if option_type.lower() == 'call':
             delta = n_d1
-            theta = (-(S * n_prime_d1 * sigma) / (2 * math.sqrt(T)) 
-                     - r * K * math.exp(-r * T) * n_d2) / 365
+            theta = (-(S * n_prime_d1 * sigma) / (2 * math.sqrt(T))
+                    - r * K * math.exp(-r * T) * n_d2) / 365
         else:  # put
             delta = n_d1 - 1
-            theta = (-(S * n_prime_d1 * sigma) / (2 * math.sqrt(T)) 
-                     + r * K * math.exp(-r * T) * norm.cdf(-d2)) / 365
+            theta = (-(S * n_prime_d1 * sigma) / (2 * math.sqrt(T))
+                    + r * K * math.exp(-r * T) * _standard_normal_cdf(-d2)) / 365
         
         gamma = n_prime_d1 / (S * sigma * math.sqrt(T))
         vega = S * n_prime_d1 * math.sqrt(T) / 100  # Per 1% IV change
@@ -90,6 +89,16 @@ def calculate_greeks(stock_price: float, strike: float, time_to_expiry: float,
         }
     except Exception:
         return {'delta': 0, 'gamma': 0, 'theta': 0, 'vega': 0}
+
+
+def _standard_normal_pdf(x: float) -> float:
+    """Standard normal probability density function."""
+    return (1 / math.sqrt(2 * math.pi)) * math.exp(-0.5 * x * x)
+
+
+def _standard_normal_cdf(x: float) -> float:
+    """Standard normal cumulative distribution function using error function."""
+    return 0.5 * (1 + math.erf(x / math.sqrt(2)))
 
 
 def calculate_scalp_score(gamma: float, vol_oi_ratio: float, spread_pct: float, 
