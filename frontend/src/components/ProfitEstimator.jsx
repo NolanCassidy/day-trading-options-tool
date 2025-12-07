@@ -362,13 +362,21 @@ function ProfitEstimator({ option, currentPrice, onClose, onNavigate }) {
     const dayHigh = liveDayHigh || option.dayHigh || liveCurrentPrice * 1.01
     const dayLow = liveDayLow || option.dayLow || liveCurrentPrice * 0.99
 
-    // Initialize chart range (default 5% buffer around High/Low)
+    // Initialize chart range (default symmetric range based on max deviation)
     useEffect(() => {
         if (liveCurrentPrice && chartRange.min === null) {
-            // Default: 5% below Low and 5% above High
-            // If High/Low not available yet, fallback to ±10% of current
-            const min = dayLow ? dayLow * 0.95 : liveCurrentPrice * 0.9
-            const max = dayHigh ? dayHigh * 1.05 : liveCurrentPrice * 1.1
+            // Logic: find max % deviation from current to high or low
+            // Double it to get the range on EACH side
+            const highDist = dayHigh ? (dayHigh - liveCurrentPrice) / liveCurrentPrice : 0.05
+            const lowDist = dayLow ? (liveCurrentPrice - dayLow) / liveCurrentPrice : 0.05
+
+            // Should be positive distances
+            const maxDist = Math.max(Math.abs(highDist), Math.abs(lowDist))
+            // Minimum 1% range to prevent zero-range, but allow tight zoom for low vol stocks
+            const rangePct = Math.max(0.01, maxDist * 2)
+
+            const min = liveCurrentPrice * (1 - rangePct)
+            const max = liveCurrentPrice * (1 + rangePct)
             setChartRange({ min, max })
         }
     }, [liveCurrentPrice, dayHigh, dayLow])
@@ -378,8 +386,20 @@ function ProfitEstimator({ option, currentPrice, onClose, onNavigate }) {
         if (!option || !liveCurrentPrice) return []
 
         // Generate price range based on custom bounds or defaults
-        const minPrice = chartRange.min || (dayLow ? dayLow * 0.95 : liveCurrentPrice * 0.9)
-        const maxPrice = chartRange.max || (dayHigh ? dayHigh * 1.05 : liveCurrentPrice * 1.1)
+        // Fallback calculation mirrors useEffect logic
+        // This is a bit redundant but standard for this pattern
+        let minPrice = chartRange.min
+        let maxPrice = chartRange.max
+
+        if (!minPrice || !maxPrice) {
+            const highDist = dayHigh ? (dayHigh - liveCurrentPrice) / liveCurrentPrice : 0.05
+            const lowDist = dayLow ? (liveCurrentPrice - dayLow) / liveCurrentPrice : 0.05
+            const maxDist = Math.max(Math.abs(highDist), Math.abs(lowDist))
+            const rangePct = Math.max(0.01, maxDist * 2)
+
+            minPrice = liveCurrentPrice * (1 - rangePct)
+            maxPrice = liveCurrentPrice * (1 + rangePct)
+        }
         const step = (maxPrice - minPrice) / 50
 
         // Time REMAINING on option when you sell = total time - time until sell
