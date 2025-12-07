@@ -828,10 +828,53 @@ def get_ai_recommendation(options_data: dict, market_context: dict = None) -> di
     Gemini analyzes ALL options and picks the best one.
     """
     try:
-        calls = options_data.get('topCalls', [])[:20]  # Send more options for AI to analyze
-        puts = options_data.get('topPuts', [])[:20]
+        # Get ALL options (don't slice yet)
+        raw_calls = options_data.get('topCalls', [])
+        raw_puts = options_data.get('topPuts', [])
+
+        # ------------------------------------------------------------------
+        # STRIKE FILTERING (HARD CONSTRAINT)
+        # Filter out Deep ITM (Delta > 0.80) and Far OTM (Delta < 0.20)
+        # ------------------------------------------------------------------
+        def is_tradeable(opt):
+            try:
+                # If Delta is missing, assume it's tradeable to be safe, or filter?
+                # Using 0.0 default might filter it out.
+                d = abs(float(opt.get('delta', 0)))
+                # Range: 0.15 to 0.85 (Slightly wider to catch edge cases)
+                return 0.15 <= d <= 0.85
+            except:
+                return False
+
+        # Filter FIRST, then slice
+        filtered_calls = [c for c in raw_calls if is_tradeable(c)]
+        filtered_puts = [p for p in raw_puts if is_tradeable(p)]
         
-        if not calls and not puts:
+        # Sort by Scalp Score (descending) before slicing
+        # This prioritizes the "best" technical setups within the tradeable range
+        filtered_calls.sort(key=lambda x: x.get('scalpScore', 0) or 0, reverse=True)
+        filtered_puts.sort(key=lambda x: x.get('scalpScore', 0) or 0, reverse=True)
+
+        # If filtering removes too many, fallback to:
+        # 1. Widen filter? 
+        # 2. Just take the ones closest to ATM (Delta ~0.5)?
+        # For now, if empty, we take the middle of the raw list (likely ATM)
+        if len(filtered_calls) < 3 and len(raw_calls) > 10:
+             mid = len(raw_calls) // 2
+             filtered_calls = raw_calls[max(0, mid-5):min(len(raw_calls), mid+5)]
+        
+        if len(filtered_puts) < 3 and len(raw_puts) > 10:
+             mid = len(raw_puts) // 2
+             filtered_puts = raw_puts[max(0, mid-5):min(len(raw_puts), mid+5)]
+        
+        # Now take top candidates for AI
+        ai_calls = filtered_calls[:10]
+        ai_puts = filtered_puts[:10]
+
+        if not ai_calls and not ai_puts:
+             # Last resort fallback
+             ai_calls = raw_calls[:5]
+             ai_puts = raw_puts[:5]
             return {"error": "No options data to analyze"}
         
         print(f"[AI] GEMINI_AVAILABLE = {GEMINI_AVAILABLE}")
@@ -864,13 +907,14 @@ def get_ai_recommendation(options_data: dict, market_context: dict = None) -> di
                 
                 stock_section = chr(10).join(stock_info) if stock_info else "Stock data unavailable"
                 
-                # Format all options for Gemini to analyze
+                # Format options for the prompt
                 all_options = []
-                for i, c in enumerate(calls):
-                    all_options.append(f"{i+1}. CALL {c.get('ticker')} ${c.get('strike')} exp:{c.get('expiry')} | Price:${c.get('lastPrice'):.2f} Δ:{c.get('delta')} γ:{c.get('gamma')} Score:{c.get('scalpScore')} Rev%:{c.get('reversalPct')}%")
-                for i, p in enumerate(puts):
-                    all_options.append(f"{i+1+len(calls)}. PUT {p.get('ticker')} ${p.get('strike')} exp:{p.get('expiry')} | Price:${p.get('lastPrice'):.2f} Δ:{p.get('delta')} γ:{p.get('gamma')} Score:{p.get('scalpScore')} Rev%:{p.get('reversalPct')}%")
+                for i, c in enumerate(filtered_calls[:8]):
+                     all_options.append(f"{i+1}. CALL {c.get('ticker')} ${c.get('strike')} exp:{c.get('expiry')} | Price:${c.get('lastPrice'):.2f} Δ:{c.get('delta')} γ:{c.get('gamma')} Score:{c.get('scalpScore')} Rev%:{c.get('reversalPct')}%")
                 
+                for i, p in enumerate(filtered_puts[:8]):
+                     all_options.append(f"{i+1+len(filtered_calls[:8])}. PUT {p.get('ticker')} ${p.get('strike')} exp:{p.get('expiry')} | Price:${p.get('lastPrice'):.2f} Δ:{p.get('delta')} γ:{p.get('gamma')} Score:{p.get('scalpScore')} Rev%:{p.get('reversalPct')}%")
+
                 options_list = chr(10).join(all_options)
                 
                 prompt = f"""You are an expert options day trader specializing in quick scalping plays. Analyze ALL these options and pick THE SINGLE BEST one for a quick scalp trade (hold for minutes to hours). 
@@ -1008,10 +1052,6 @@ RUNNER UPS:
                         "strike": recommendation.get('strike'),
                         "expiry": recommendation.get('expiry'),
                         "price": recommendation.get('lastPrice'),
-                        "reasoning": reasoning,
-                        "plan": plan, # Return the plan
-                        "confidence": confidence,
-                        "aiPowered": True,
                         "scalpScore": recommendation.get('scalpScore'),
                         "reversalPct": recommendation.get('reversalPct'),
                         "delta": recommendation.get('delta'),
@@ -1025,6 +1065,11 @@ RUNNER UPS:
                         "volume": recommendation.get('volume'),
                         "inTheMoney": recommendation.get('inTheMoney'),
                     },
+                    "reasoning": reasoning,
+                    "plan": plan,
+                    "confidence": confidence,
+                    "disclaimer": "AI-generated analysis. Not financial advice.",
+                    "aiPowered": True,
                     "runnerUps": runner_ups[:4] # Return top 4
                 }
                     
@@ -1049,7 +1094,8 @@ RUNNER UPS:
                 "delta": recommendation.get('delta'),
                 "gamma": recommendation.get('gamma'),
             },
-            "reasoning": f"This {recommendation.get('type')} on {recommendation.get('ticker')} has the highest scalp score of {recommendation.get('scalpScore')} with {recommendation.get('reversalPct')}% reversal potential.",
+            "reasoning": f"This {recommendation.get('type')} on {recommendation.get('ticker')} has the highest scalp score (algrothmic fallback).",
+            "plan": f"ENTRY: ~${recommendation.get('lastPrice', 0):.2f} | SL: -10% | TP: +20% (Algorithmic Estimate)",
             "confidence": "medium",
             "disclaimer": "This is algorithmic analysis, not financial advice. Always do your own research.",
             "aiPowered": False

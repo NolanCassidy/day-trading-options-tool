@@ -11,7 +11,7 @@ Scan 100+ stocks, get AI trade recommendations, analyze with interactive candles
 ### 🧠 AI Trade Advisor (New v2)
 - **Deep Analysis**: Analyzes technicals across **5 timeframes** (1m, 5m, 1h, 1d, 1wk) to spot trend alignment.
 - **Actionable Plans**: Provides specific **Entry**, **Stop Loss**, and **Take Profit** targets for every trade.
-- **Smart Strike Selection**: Automatically targets **ATM/Near-OTM** options (Delta 0.30-0.65) for optimal leverage, avoiding low-ROI deep ITM calls.
+- **Smart Strike Selection**: Automatically targets **ATM/Near-OTM** options (Delta 0.15-0.85) for optimal leverage, avoiding low-ROI deep ITM calls.
 - **Scope Control**: Analyze Calls, Puts, or Both with a single click.
 
 > **Customizing the AI Strategy**:
