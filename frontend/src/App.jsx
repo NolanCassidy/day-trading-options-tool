@@ -3,8 +3,7 @@ import './index.css'
 import ProfitEstimator from './components/ProfitEstimator'
 import StockChart from './components/StockChart'
 import AIAdvisor from './components/AIAdvisor'
-
-const API_BASE = 'http://localhost:8000'
+import API_BASE from './apiConfig'
 
 // Parse URL hash for routing
 const getInitialState = () => {

@@ -1,6 +1,7 @@
 """
 FastAPI backend for Options Trading Dashboard
 """
+import os
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from typing import Optional
@@ -19,9 +20,21 @@ app = FastAPI(
 )
 
 # Enable CORS for frontend
+allowed_origins_env = os.getenv("ALLOWED_ORIGINS")
+allowed_origins = [
+    origin.strip()
+    for origin in (allowed_origins_env.split(",") if allowed_origins_env else [])
+    if origin.strip()
+]
+
+default_origins = [
+    "http://localhost:5173",
+    "http://127.0.0.1:5173",
+]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],
+    allow_origins=allowed_origins or default_origins or ["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

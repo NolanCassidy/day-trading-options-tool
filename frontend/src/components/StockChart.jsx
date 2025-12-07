@@ -1,7 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { createChart, CandlestickSeries, LineSeries, HistogramSeries } from 'lightweight-charts'
-
-const API_BASE = 'http://localhost:8000'
+import API_BASE from '../apiConfig'
 
 function StockChart({ ticker, strikes = [] }) {
     const chartContainerRef = useRef(null)
