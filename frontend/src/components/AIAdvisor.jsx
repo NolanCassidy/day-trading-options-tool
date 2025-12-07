@@ -132,6 +132,17 @@ function AIAdvisor({ scanResults, onClose, onSelectOption }) {
                             <div className="click-hint">👆 Click to open Profit Estimator</div>
                         </div>
 
+                        {recommendation.plan && (
+                            <div className="rec-plan">
+                                <h4>Trading Plan</h4>
+                                <div className="plan-details">
+                                    {recommendation.plan.split('|').map((part, i) => (
+                                        <span key={i} className="plan-part">{part.trim()}</span>
+                                    ))}
+                                </div>
+                            </div>
+                        )}
+
                         <div className="rec-reasoning">
                             <h4>Analysis</h4>
                             <p>{recommendation.reasoning}</p>
@@ -145,18 +156,16 @@ function AIAdvisor({ scanResults, onClose, onSelectOption }) {
 
                         {runnerUps.length > 0 && (
                             <div className="runner-ups">
-                                <h4>🥈 Runner-Up Picks</h4>
+                                <h4>Alternatives</h4>
                                 <div className="runner-ups-list">
-                                    {runnerUps.map((opt, i) => (
-                                        <div
-                                            key={i}
-                                            className={`runner-up-item ${opt.type?.toLowerCase()}`}
-                                            onClick={() => handleOptionClick(opt)}
-                                        >
-                                            <span className="ru-type">{opt.type}</span>
-                                            <span className="ru-ticker">{opt.ticker} ${opt.strike}</span>
-                                            <span className="ru-price">${opt.price?.toFixed(2)}</span>
-                                            <span className="ru-score">{opt.scalpScore}</span>
+                                    {runnerUps.map((run, i) => (
+                                        <div key={i} className="runner-up-item" onClick={() => handleOptionClick(run)}>
+                                            <div className="ru-header">
+                                                <span className={`ru-type ${run.type?.toLowerCase()}`}>{run.type}</span>
+                                                <span className="ru-strike">${run.strike}</span>
+                                                <span className="ru-expiry">{run.expiry}</span>
+                                            </div>
+                                            {run.reason && <div className="ru-reason">{run.reason}</div>}
                                         </div>
                                     ))}
                                 </div>

@@ -34,6 +34,7 @@ function App() {
   const [error, setError] = useState('')
   const [selectedOption, setSelectedOption] = useState(null)
   const [showAIAdvisor, setShowAIAdvisor] = useState(false)
+  const [aiScope, setAiScope] = useState('both') // 'calls', 'puts', 'both'
 
   // Filter state
   const [filters, setFilters] = useState({
@@ -518,33 +519,6 @@ function App() {
               <span className="expiry-badge">
                 Expires: {topVolume.expiry} ({topVolume.daysToExpiry} day{topVolume.daysToExpiry !== 1 ? 's' : ''})
               </span>
-              <button
-                className="ai-btn"
-                onClick={() => {
-                  // Set up AI advisor with just this stock's options
-                  setScanResults({
-                    topCalls: topVolume.topCalls.map(c => ({
-                      ...c,
-                      ticker: topVolume.symbol,
-                      expiry: topVolume.expiry,
-                      daysToExpiry: topVolume.daysToExpiry,
-                      type: 'CALL',
-                      stockPrice: quote?.price,
-                    })),
-                    topPuts: topVolume.topPuts.map(p => ({
-                      ...p,
-                      ticker: topVolume.symbol,
-                      expiry: topVolume.expiry,
-                      daysToExpiry: topVolume.daysToExpiry,
-                      type: 'PUT',
-                      stockPrice: quote?.price,
-                    })),
-                  })
-                  setShowAIAdvisor(true)
-                }}
-              >
-                ai.scan({topVolume.symbol})
-              </button>
             </div>
             <div className="tabs">
               <button
@@ -618,34 +592,74 @@ function App() {
               >
                 All Puts ({options.puts?.length || 0})
               </button>
-              <button
-                className="ai-btn"
-                style={{ marginLeft: 'auto' }}
-                onClick={() => {
-                  const daysToExpiry = Math.ceil((new Date(selectedExpiry) - new Date()) / (1000 * 60 * 60 * 24))
-                  setScanResults({
-                    topCalls: (options.calls || []).slice(0, 30).map(c => ({
+              {/* AI Scope Toggles */}
+              <div className="scope-toggles" style={{ marginLeft: 'auto', display: 'flex', gap: '8px', alignItems: 'center' }}>
+                <label className={`scope-btn ${aiScope === 'calls' ? 'active' : ''}`}>
+                  <input
+                    type="radio"
+                    name="scope"
+                    checked={aiScope === 'calls'}
+                    onChange={() => setAiScope('calls')}
+                    hidden
+                  />
+                  CALLS
+                </label>
+                <label className={`scope-btn ${aiScope === 'puts' ? 'active' : ''}`}>
+                  <input
+                    type="radio"
+                    name="scope"
+                    checked={aiScope === 'puts'}
+                    onChange={() => setAiScope('puts')}
+                    hidden
+                  />
+                  PUTS
+                </label>
+                <label className={`scope-btn ${aiScope === 'both' ? 'active' : ''}`}>
+                  <input
+                    type="radio"
+                    name="scope"
+                    checked={aiScope === 'both'}
+                    onChange={() => setAiScope('both')}
+                    hidden
+                  />
+                  BOTH
+                </label>
+
+                <button
+                  className="ai-btn"
+                  onClick={() => {
+                    const daysToExpiry = Math.ceil((new Date(selectedExpiry) - new Date()) / (1000 * 60 * 60 * 24))
+
+                    const callsData = (options.calls || []).slice(0, 30).map(c => ({
                       ...c,
                       ticker: searchTicker,
                       expiry: selectedExpiry,
                       daysToExpiry,
                       type: 'CALL',
                       stockPrice: quote?.price,
-                    })),
-                    topPuts: (options.puts || []).slice(0, 30).map(p => ({
+                    }))
+
+                    const putsData = (options.puts || []).slice(0, 30).map(p => ({
                       ...p,
                       ticker: searchTicker,
                       expiry: selectedExpiry,
                       daysToExpiry,
                       type: 'PUT',
                       stockPrice: quote?.price,
-                    })),
-                  })
-                  setShowAIAdvisor(true)
-                }}
-              >
-                ai.analyze
-              </button>
+                    }))
+
+                    setScanResults({
+                      // If scope is 'calls', send calls. If 'puts', empty list. If 'both', send calls.
+                      topCalls: (aiScope === 'calls' || aiScope === 'both') ? callsData : [],
+                      // If scope is 'puts', send puts. If 'calls', empty list. If 'both', send puts.
+                      topPuts: (aiScope === 'puts' || aiScope === 'both') ? putsData : [],
+                    })
+                    setShowAIAdvisor(true)
+                  }}
+                >
+                  ai.analyze_scope
+                </button>
+              </div>
             </div>
 
             <select
@@ -667,6 +681,7 @@ function App() {
                   <th>Last</th>
                   <th>Bid</th>
                   <th>Ask</th>
+                  <th>Rev%</th>
                   <th>Change</th>
                   <th>Volume</th>
                   <th>Open Int</th>
@@ -675,11 +690,16 @@ function App() {
               </thead>
               <tbody>
                 {currentOptions.map((opt, idx) => (
-                  <tr key={idx} className={opt.inTheMoney ? 'itm' : ''} onClick={() => handleOptionClick(opt, searchTicker, selectedExpiry, Math.ceil((new Date(selectedExpiry) - new Date()) / (1000 * 60 * 60 * 24)), activeTab === 'calls' ? 'CALL' : 'PUT')}>
+                  <tr key={idx}
+                    className={`${opt.inTheMoney ? 'itm' : 'otm'}`}
+                    onClick={() => handleOptionClick(opt, searchTicker, selectedExpiry, Math.ceil((new Date(selectedExpiry) - new Date()) / (1000 * 60 * 60 * 24)), activeTab === 'calls' ? 'CALL' : 'PUT')}>
                     <td className="strike-cell">{formatPrice(opt.strike)}</td>
                     <td>{formatPrice(opt.lastPrice)}</td>
                     <td>{formatPrice(opt.bid)}</td>
                     <td>{formatPrice(opt.ask)}</td>
+                    <td className={opt.reversalPct >= 20 ? 'reversal-hot' : opt.reversalPct >= 10 ? 'reversal-good' : ''}>
+                      {opt.reversalPct > 0 ? `+${opt.reversalPct}%` : '-'}
+                    </td>
                     <td className={opt.change >= 0 ? 'price-positive' : 'price-negative'}>
                       {opt.change >= 0 ? '+' : ''}{opt.change?.toFixed(2) || '-'}
                     </td>

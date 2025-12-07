@@ -202,46 +202,94 @@ def get_options_chain(ticker: str, expiry: Optional[str] = None) -> dict:
     # Get options chain for selected expiry
     opt = stock.option_chain(selected_expiry)
     
+    # Get stock data for Greeks/Reversal calc
+    try:
+        hist = stock.history(period='1d')
+        if not hist.empty:
+            current_price = hist['Close'].iloc[-1]
+            day_high = hist['High'].iloc[-1]
+            day_low = hist['Low'].iloc[-1]
+        else:
+            current_price = day_high = day_low = 0
+    except:
+        current_price = day_high = day_low = 0
+
+    # Calculate time to expiry
+    expiry_date = datetime.strptime(selected_expiry, '%Y-%m-%d')
+    days_to_expiry = (expiry_date - datetime.now()).days
+    time_to_expiry = max(days_to_expiry / 365.0, 0.001)
+
+    # Helper to process option row
+    def process_option_row(row, opt_type):
+        strike = float(row['strike'])
+        last_price = float(row['lastPrice']) if not pd.isna(row['lastPrice']) else 0
+        bid = float(row['bid']) if not pd.isna(row['bid']) else 0
+        ask = float(row['ask']) if not pd.isna(row['ask']) else 0
+        volume = int(row['volume']) if not pd.isna(row['volume']) else 0
+        open_interest = int(row['openInterest']) if not pd.isna(row['openInterest']) else 0
+        iv = float(row['impliedVolatility']) if not pd.isna(row['impliedVolatility']) else 0
+        
+        # Greeks
+        greeks = calculate_greeks(current_price, strike, time_to_expiry, iv, opt_type)
+        
+        # Vol/OI
+        vol_oi_ratio = round(volume / open_interest, 2) if open_interest > 0 else 0
+        
+        # Spread Pct
+        mid_price = (bid + ask) / 2 if bid and ask else last_price
+        spread_pct = round(((ask - bid) / mid_price * 100), 1) if mid_price > 0 else 0
+        
+        # Scalp Score
+        scalp_score = calculate_scalp_score(greeks['gamma'], vol_oi_ratio, spread_pct, greeks['delta'])
+        
+        # Reversal %
+        reversal_pct = 0
+        if current_price and day_high and day_low and greeks['delta']:
+            if opt_type == 'CALL' and current_price < day_high:
+                price_move = day_high - current_price
+                reversal_pct = round((price_move * abs(greeks['delta']) / mid_price * 100), 1) if mid_price > 0 else 0
+            elif opt_type == 'PUT' and current_price > day_low:
+                price_move = current_price - day_low
+                reversal_pct = round((price_move * abs(greeks['delta']) / mid_price * 100), 1) if mid_price > 0 else 0
+
+        return {
+            "strike": strike,
+            "lastPrice": last_price,
+            "bid": bid,
+            "ask": ask,
+            "change": float(row['change']) if not pd.isna(row['change']) else 0,
+            "percentChange": float(row['percentChange']) if not pd.isna(row['percentChange']) else 0,
+            "volume": volume,
+            "openInterest": open_interest,
+            "impliedVolatility": round(iv * 100, 2),
+            "inTheMoney": bool(row['inTheMoney']),
+            "contractSymbol": row['contractSymbol'],
+            # key additions
+            "delta": greeks['delta'],
+            "gamma": greeks['gamma'],
+            "scalpScore": scalp_score,
+            "reversalPct": reversal_pct,
+            "spread": round(ask - bid, 2),
+            "type": opt_type
+        }
+    
     # Format calls
     calls = []
     for _, row in opt.calls.iterrows():
-        calls.append({
-            "strike": float(row['strike']),
-            "lastPrice": float(row['lastPrice']) if not pd.isna(row['lastPrice']) else 0,
-            "bid": float(row['bid']) if not pd.isna(row['bid']) else 0,
-            "ask": float(row['ask']) if not pd.isna(row['ask']) else 0,
-            "change": float(row['change']) if not pd.isna(row['change']) else 0,
-            "percentChange": float(row['percentChange']) if not pd.isna(row['percentChange']) else 0,
-            "volume": int(row['volume']) if not pd.isna(row['volume']) else 0,
-            "openInterest": int(row['openInterest']) if not pd.isna(row['openInterest']) else 0,
-            "impliedVolatility": round(float(row['impliedVolatility']) * 100, 2) if not pd.isna(row['impliedVolatility']) else 0,
-            "inTheMoney": bool(row['inTheMoney']),
-            "contractSymbol": row['contractSymbol']
-        })
+        calls.append(process_option_row(row, 'CALL'))
     
     # Format puts
     puts = []
     for _, row in opt.puts.iterrows():
-        puts.append({
-            "strike": float(row['strike']),
-            "lastPrice": float(row['lastPrice']) if not pd.isna(row['lastPrice']) else 0,
-            "bid": float(row['bid']) if not pd.isna(row['bid']) else 0,
-            "ask": float(row['ask']) if not pd.isna(row['ask']) else 0,
-            "change": float(row['change']) if not pd.isna(row['change']) else 0,
-            "percentChange": float(row['percentChange']) if not pd.isna(row['percentChange']) else 0,
-            "volume": int(row['volume']) if not pd.isna(row['volume']) else 0,
-            "openInterest": int(row['openInterest']) if not pd.isna(row['openInterest']) else 0,
-            "impliedVolatility": round(float(row['impliedVolatility']) * 100, 2) if not pd.isna(row['impliedVolatility']) else 0,
-            "inTheMoney": bool(row['inTheMoney']),
-            "contractSymbol": row['contractSymbol']
-        })
+        puts.append(process_option_row(row, 'PUT'))
     
     return {
         "symbol": ticker.upper(),
         "expirations": list(expirations),
         "selectedExpiry": selected_expiry,
         "calls": calls,
-        "puts": puts
+        "puts": puts,
+        "stockPrice": round(current_price, 2) # Useful for frontend
     }
 
 
@@ -704,6 +752,76 @@ def detect_unusual_activity(ticker: str) -> dict:
         return {"error": str(e), "ticker": ticker}
 
 
+def get_multi_timeframe_technicals(ticker: str) -> dict:
+    """
+    Fetch technical indicators for multiple timeframes (1m, 5m, 1h, 1d, 1wk)
+    to provide AI with deep context.
+    """
+    timeframes = {
+        "1m": {"period": "1d", "interval": "1m"},
+        "5m": {"period": "5d", "interval": "5m"},
+        "1h": {"period": "1mo", "interval": "60m"},
+        "4h": {"period": "3mo", "interval": "60m"}, # 4h not supported by yfinance, will reuse 1h data generally or just rely on 1h/1d
+        "1d": {"period": "6mo", "interval": "1d"},
+        "1wk": {"period": "1y", "interval": "1wk"}
+    }
+    
+    results = {}
+    
+    for tf, params in timeframes.items():
+        try:
+            # Skip 4h actual fetch, just reuse 1h logic or skip
+            if tf == "4h":
+                continue
+                
+            tik = yf.Ticker(ticker)
+            # Fetch history
+            hist = tik.history(period=params['period'], interval=params['interval'])
+            
+            if hist.empty:
+                results[tf] = {"error": "No data"}
+                continue
+                
+            # Basic checks
+            current_price = hist['Close'].iloc[-1]
+            
+            # EMAs
+            ema9 = hist['Close'].ewm(span=9, adjust=False).mean().iloc[-1]
+            ema21 = hist['Close'].ewm(span=21, adjust=False).mean().iloc[-1]
+            ema50 = hist['Close'].ewm(span=50, adjust=False).mean().iloc[-1]
+            ema200 = hist['Close'].ewm(span=200, adjust=False).mean().iloc[-1]
+            
+            # RSI
+            delta = hist['Close'].diff()
+            gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
+            loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
+            rs = gain / loss
+            rsi = 100 - (100 / (1 + rs)).iloc[-1]
+            
+            # Trend
+            trend = "NEUTRAL"
+            if current_price > ema9 > ema21:
+                trend = "BULLISH"
+            elif current_price < ema9 < ema21:
+                trend = "BEARISH"
+                
+            results[tf] = {
+                "price": round(current_price, 2),
+                "rsi": round(rsi, 1) if not pd.isna(rsi) else 50,
+                "ema9": round(ema9, 2),
+                "ema21": round(ema21, 2),
+                "ema50": round(ema50, 2),
+                "ema200": round(ema200, 2),
+                "trend": trend,
+                "change": round(((current_price - hist['Open'].iloc[0]) / hist['Open'].iloc[0]) * 100, 2)
+            }
+            
+        except Exception as e:
+            results[tf] = {"error": str(e)}
+            
+    return results
+
+
 def get_ai_recommendation(options_data: dict, market_context: dict = None) -> dict:
     """
     Generate AI recommendation for best option trade using Gemini API.
@@ -726,30 +844,24 @@ def get_ai_recommendation(options_data: dict, market_context: dict = None) -> di
                 # Get unique tickers and fetch their stock data
                 all_tickers = set([c.get('ticker') for c in calls] + [p.get('ticker') for p in puts])
                 stock_data = {}
-                for ticker in list(all_tickers)[:10]:  # Limit to 10 stocks for speed
+                for ticker in list(all_tickers)[:5]:  # Limit to 5 stocks for speed with multi-tf fetch
                     try:
-                        hist = get_stock_history(ticker, period="1mo", interval="1d")
-                        if not hist.get('error'):
-                            ind = hist.get('indicators', {})
-                            stock_data[ticker] = {
-                                'price': ind.get('currentPrice'),
-                                'rsi': ind.get('rsi'),
-                                'atr': ind.get('atr'),
-                                'atrPct': ind.get('atrPercent'),
-                                'dayHigh': ind.get('dayHigh'),
-                                'dayLow': ind.get('dayLow'),
-                                '52wkHigh': ind.get('week52High'),
-                                '52wkLow': ind.get('week52Low'),
-                                'pctFrom52High': ind.get('pctFrom52High'),
-                                'pctFrom52Low': ind.get('pctFrom52Low'),
-                            }
+                        # Use the new multi-timeframe fetcher
+                        technicals = get_multi_timeframe_technicals(ticker)
+                        if technicals:
+                            stock_data[ticker] = technicals
                     except:
                         pass
                 
-                # Format stock data section
+                # Format stock data section with multi-timeframe info
                 stock_info = []
-                for ticker, data in stock_data.items():
-                    stock_info.append(f"{ticker}: Price ${data.get('price'):.2f} | RSI {data.get('rsi')} | ATR ${data.get('atr')} ({data.get('atrPct')}%) | Day Range ${data.get('dayLow')}-${data.get('dayHigh')} | 52wk Range ${data.get('52wkLow')}-${data.get('52wkHigh')} ({data.get('pctFrom52High')}% from high)")
+                for ticker, tf_data in stock_data.items():
+                    info = [f"=== {ticker} MULTI-TIMEFRAME ANALYSIS ==="]
+                    for tf, data in tf_data.items():
+                        if "error" not in data:
+                            info.append(f"[{tf}] Trend:{data.get('trend')} | Price:${data.get('price')} | RSI:{data.get('rsi')} | Change:{data.get('change')}%")
+                    stock_info.append(" | ".join(info))
+                
                 stock_section = chr(10).join(stock_info) if stock_info else "Stock data unavailable"
                 
                 # Format all options for Gemini to analyze
@@ -761,40 +873,51 @@ def get_ai_recommendation(options_data: dict, market_context: dict = None) -> di
                 
                 options_list = chr(10).join(all_options)
                 
-                prompt = f"""You are an expert options day trader specializing in quick scalping plays. Analyze ALL these options and pick THE SINGLE BEST one for a quick scalp trade (hold for minutes to hours).
+                prompt = f"""You are an expert options day trader specializing in quick scalping plays. Analyze ALL these options and pick THE SINGLE BEST one for a quick scalp trade (hold for minutes to hours). 
+TARGET: Look for options that can deliver 10-80% returns on a 0.5% - 5% quick stock move. Avoid options that are too far OTM to profit from small moves.
 
-STOCK TECHNICAL DATA:
+STOCK TECHNICAL DATA (MULTI-TIMEFRAME):
 {stock_section}
 
 OPTIONS TO ANALYZE:
 {options_list}
 
 CRITERIA TO CONSIDER:
-- RSI < 30 = oversold (good for calls), RSI > 70 = overbought (good for puts)
-- Stock near day low = potential bounce (calls), near day high = potential fade (puts)
-- High scalp score = better short-term profit potential
-- High reversal % = stock is far from its day high/low, room to move
-- Delta near 0.5 = most responsive to price movement
-- High gamma = explosive profit potential on small moves
-- Lower option price = less capital at risk
+- **STRIKE SELECTION (CRITICAL)**: PREFER strikes that are At-The-Money (ATM) or slightly Out-Of-The-Money (OTM).
+    - **Ideal Delta**: 0.30 to 0.65. This offers the best balance of speed and leverage.
+    - **AVOID Deep ITM**: Do NOT pick options with Delta > 0.80. They are too expensive and lack leverage.
+    - **AVOID Far OTM**: Do NOT pick Delta < 0.20 unless it's a "lotto" runner-up.
+- **MULTI-TIMEFRAME ALIGNMENT**: Look for alignment between 5m/15m momentum and 1h/1d trends.
+- **RSI**: < 30 (oversold) good for calls, > 70 (overbought) good for puts.
+- **Scalp Score**: Higher is better.
 
-RESPOND IN THIS EXACT FORMAT:
-PICK: [number from list above]
-TICKER: [symbol]
-TYPE: [CALL or PUT]  
-STRIKE: [price]
-REASONING: [2-3 sentences explaining why this specific option is the best pick. Reference the stock's RSI, price action relative to day range, and option Greeks. Be specific!]
-CONFIDENCE: [HIGH, MEDIUM, or LOW]"""
+FORMAT YOUR RESPONSE EXACTLY LIKE THIS:
+PICK: [Option Number]
+TICKER: [Ticker Symbol]
+TYPE: [CALL or PUT]
+STRIKE: [Strike Price]
+REASONING: [2-3 sentences explaining why this is the best scalp. Explicitly reference the MULTI-TIMEFRAME alignment (e.g. "Daily is bullish and 5m is oversold..."). Mention Greeks/Score.]
+PLAN: Entry: [Entry Price/Condition] | SL: [Stop Loss Price] | TP: [Take Profit Price]
+CONFIDENCE: [HIGH/MEDIUM/LOW]
 
+RUNNER UPS:
+1. [Option Number] [Type] [Strike] (Reason: short reason)
+2. [Option Number] [Type] [Strike] (Reason: short reason)
+3. [Option Number] [Type] [Strike] (Reason: short reason)
+4. [Option Number] [Type] [Strike] (Reason: short reason)
+"""
                 response = model.generate_content(prompt)
                 ai_text = response.text.strip()
                 print(f"[AI] Gemini response:\n{ai_text}")
+                
                 
                 # Parse the response
                 lines = ai_text.split('\n')
                 pick_num = None
                 reasoning = ""
+                plan = ""
                 confidence = "medium"
+                runner_up_details = {}
                 
                 for line in lines:
                     line = line.strip()
@@ -805,6 +928,8 @@ CONFIDENCE: [HIGH, MEDIUM, or LOW]"""
                             pass
                     elif line.startswith('REASONING:'):
                         reasoning = line.replace('REASONING:', '').strip()
+                    elif line.startswith('PLAN:'):
+                        plan = line.replace('PLAN:', '').strip()
                     elif line.startswith('CONFIDENCE:'):
                         conf = line.replace('CONFIDENCE:', '').strip().lower()
                         if 'high' in conf:
@@ -813,7 +938,26 @@ CONFIDENCE: [HIGH, MEDIUM, or LOW]"""
                             confidence = 'low'
                         else:
                             confidence = 'medium'
-                
+                    # Parse runner ups like "1. 5 CALL 155 (Reason: ...)"
+                    elif line.lower().startswith('1.') or line.lower().startswith('2.') or line.lower().startswith('3.') or line.lower().startswith('4.'):
+                         try:
+                             # Extract option index (basic heuristic)
+                             parts = line.split()
+                             # Try to find the option number in the string
+                             for part in parts:
+                                 if part.replace('.', '').isdigit():
+                                     idx = int(part.replace('.', '')) - 1
+                                     # Extract reason inside parens or after colon
+                                     reason = ""
+                                     if '(' in line and ')' in line:
+                                         reason = line.split('(')[1].split(')')[0].replace('Reason:', '').strip()
+                                     elif ':' in line: # Fallback if no parens
+                                         reason = line.split(':')[-1].strip()
+                                     runner_up_details[idx] = reason
+                                     break
+                         except:
+                             pass
+
                 # Get the picked option
                 all_opts = calls + puts
                 if pick_num is not None and 0 <= pick_num < len(all_opts):
@@ -823,26 +967,40 @@ CONFIDENCE: [HIGH, MEDIUM, or LOW]"""
                     recommendation = max(all_opts, key=lambda x: x.get('scalpScore', 0))
                     reasoning = reasoning or f"Selected based on highest scalp score of {recommendation.get('scalpScore')}."
                 
-                # Get runner-up picks (top 4 by score, excluding main pick)
-                sorted_opts = sorted(all_opts, key=lambda x: x.get('scalpScore', 0), reverse=True)
+                # Get runner-up picks (use AI suggestions if parsed, else fallback to score)
                 runner_ups = []
-                for opt in sorted_opts[:6]:
-                    if opt.get('contractSymbol') != recommendation.get('contractSymbol'):
-                        runner_ups.append({
-                            "ticker": opt.get('ticker'),
-                            "type": opt.get('type'),
-                            "strike": opt.get('strike'),
-                            "expiry": opt.get('expiry'),
-                            "price": opt.get('lastPrice'),
-                            "scalpScore": opt.get('scalpScore'),
-                            "reversalPct": opt.get('reversalPct'),
-                            "delta": opt.get('delta'),
-                            "gamma": opt.get('gamma'),
-                            "daysToExpiry": opt.get('daysToExpiry'),
-                        })
-                        if len(runner_ups) >= 4:
-                            break
+                # If we parsed runner ups successfully, try to map them
+                if runner_up_details:
+                     for idx, reason in runner_up_details.items():
+                         if 0 <= idx < len(all_opts) and all_opts[idx].get('contractSymbol') != recommendation.get('contractSymbol'):
+                             opt = all_opts[idx]
+                             runner_ups.append({
+                                "ticker": opt.get('ticker'),
+                                "type": opt.get('type'),
+                                "strike": opt.get('strike'),
+                                "expiry": opt.get('expiry'),
+                                "price": opt.get('lastPrice'),
+                                "scalpScore": opt.get('scalpScore'),
+                                "reversalPct": opt.get('reversalPct'),
+                                "reason": reason # Add the specific AI reason
+                             })
                 
+                # Fallback if no runner ups parsed or not enough
+                if len(runner_ups) < 4:
+                     sorted_opts = sorted(all_opts, key=lambda x: x.get('scalpScore', 0), reverse=True)
+                     for opt in sorted_opts[:8]: # Check top 8 to fill gaps
+                        if len(runner_ups) >= 4: break
+                        if opt.get('contractSymbol') != recommendation.get('contractSymbol') and not any(r['ticker'] == opt.get('ticker') and r['strike'] == opt.get('strike') for r in runner_ups):
+                             runner_ups.append({
+                                "ticker": opt.get('ticker'),
+                                "type": opt.get('type'),
+                                "strike": opt.get('strike'),
+                                "expiry": opt.get('expiry'),
+                                "price": opt.get('lastPrice'),
+                                "scalpScore": opt.get('scalpScore'),
+                                "reason": "High scalp score & technical alignment" # Generic fallback reason
+                             })
+
                 return {
                     "recommendation": {
                         "ticker": recommendation.get('ticker'),
@@ -850,17 +1008,24 @@ CONFIDENCE: [HIGH, MEDIUM, or LOW]"""
                         "strike": recommendation.get('strike'),
                         "expiry": recommendation.get('expiry'),
                         "price": recommendation.get('lastPrice'),
+                        "reasoning": reasoning,
+                        "plan": plan, # Return the plan
+                        "confidence": confidence,
+                        "aiPowered": True,
                         "scalpScore": recommendation.get('scalpScore'),
                         "reversalPct": recommendation.get('reversalPct'),
                         "delta": recommendation.get('delta'),
                         "gamma": recommendation.get('gamma'),
                         "daysToExpiry": recommendation.get('daysToExpiry'),
+                        # Add full data for profit estimator
+                        "ask": recommendation.get('ask'),
+                        "bid": recommendation.get('bid'),
+                        "impliedVolatility": recommendation.get('impliedVolatility'),
+                        "openInterest": recommendation.get('openInterest'),
+                        "volume": recommendation.get('volume'),
+                        "inTheMoney": recommendation.get('inTheMoney'),
                     },
-                    "runnerUps": runner_ups,
-                    "reasoning": reasoning or "AI analysis did not provide detailed reasoning.",
-                    "confidence": confidence,
-                    "disclaimer": "This is AI-assisted analysis, not financial advice. Always do your own research.",
-                    "aiPowered": True
+                    "runnerUps": runner_ups[:4] # Return top 4
                 }
                     
             except Exception as e:

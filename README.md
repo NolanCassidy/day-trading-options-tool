@@ -8,40 +8,41 @@ Scan 100+ stocks, get AI trade recommendations, analyze with interactive candles
 
 ## Features
 
-### AI Trade Advisor
-- **Gemini AI-powered** trade recommendations
-- Analyzes 40+ options with stock technicals (RSI, ATR, 52-week data)
-- Returns **top pick + 4 runner-ups**
-- Click any recommendation → opens Profit Estimator
-- Works on scanner results AND individual stock pages
+### 🧠 AI Trade Advisor (New v2)
+- **Deep Analysis**: Analyzes technicals across **5 timeframes** (1m, 5m, 1h, 1d, 1wk) to spot trend alignment.
+- **Actionable Plans**: Provides specific **Entry**, **Stop Loss**, and **Take Profit** targets for every trade.
+- **Smart Strike Selection**: Automatically targets **ATM/Near-OTM** options (Delta 0.30-0.65) for optimal leverage, avoiding low-ROI deep ITM calls.
+- **Scope Control**: Analyze Calls, Puts, or Both with a single click.
 
-### Interactive Stock Charts
+> **Customizing the AI Strategy**:
+> You can tweak the AI's personality and risk tolerance by editing the prompt in `backend/services/options.py`. Look for the `prompt = ...` block to adjust:
+> - Profit Targets (currently 10-80%)
+> - Hold Times (minutes vs hours)
+> - Risk Tolerance (Delta range)
+
+### 📊 Professional Charting
 - **Candlestick charts** with lightweight-charts v5
-- **Intraday timeframes**: 1M, 5M, 15M for day trading
-- **Daily timeframes**: 5D, 1MO, 3MO, 6MO, 1Y
+- **Multi-Timeframe**: 1m, 5m, 15m, 30m, 1h, 4h, 1d, 1wk
 - **Toggleable EMAs**: 9, 20, 50, 200
 - **Volume bars** with up/down coloring
 - **Indicator badges**: RSI, ATR, 52-week proximity, earnings dates
 
-### Market Scanner
-- Scan **100+ liquid stocks** in ~15 seconds
-- **Scalp Score™** ranking algorithm
-- **Greeks**: Delta, Gamma, Theta, Vega
-- **Reversal %**: Profit potential if stock reverts to day high/low
-- Filter by price, spread, volume, DTE
-- Auto-refresh every 30 seconds
+### ⚡ Options Scanner
+- **Scalp Score™**: Proprietary ranking for short-term momentum.
+- **Visual Heatmap**:
+  - **Rev% (Reversal Percentage)**: Green highlighting for high-potential reversal plays.
+  - **OTM Dimming**: Instantly spot the "At-The-Money" line with dimmed OTM strikes.
+- **Greeks**: Real-time Delta, Gamma, Theta, Vega for every option.
+- **Filters**: Sort by Price, Spread, Volume, DTE.
 
-### Profit Estimator
-- **Interactive P&L chart** with hover line
-- **Time slider** with 30-min increments
-- **Click ticker** → navigates to stock page
-- **Quick scenarios**: ±5%, ±10%, breakeven
-- Black-Scholes option pricing
+![Screenshot Placeholder: Scanner Dashboard]
 
-### UX Improvements
-- **URL routing**: Refresh preserves current page (`#scan`, `#stock/SPY`)
-- **Hacker-style UI**: Minimal buttons, monospace fonts, green accents
-- **Dark mode** trading interface
+### 💰 Profit Estimator
+- **Interactive P&L Chart**: Visualize profit at expiry vs now.
+- **Time Slider**: See how Theta decay affects your position hour-by-hour.
+- **Scenarios**: Quick buttons for ±5%, ±10%, Breakeven.
+
+![Screenshot Placeholder: Profit Estimator]
 
 ## Quick Start
 
@@ -59,32 +60,20 @@ npm run dev
 
 Open http://localhost:5173
 
-## Environment Variables
-
-Create `backend/.env`:
-```
-GEMINI_API_KEY=your_gemini_api_key
-```
-
 ## Tech Stack
 
 - **Frontend**: React 18, Vite, lightweight-charts v5
 - **Backend**: Python FastAPI, yfinance, google-generativeai
-- **AI**: Gemini 3 Pro for trade analysis
+- **AI**: Gemini 2.5 Flash for high-speed analysis
 
 ## API Endpoints
 
 | Endpoint | Description |
 |----------|-------------|
 | `GET /api/scan` | Scan all stocks, returns top 50 by scalp score |
-| `GET /api/quote/{ticker}` | Stock quote with price, change, volume |
-| `GET /api/options/{ticker}` | Full options chain |
-| `GET /api/history/{ticker}` | OHLCV + EMAs + RSI + ATR + 52wk |
-| `POST /api/ai-recommend` | AI-powered trade recommendation |
-
-## Stocks Covered
-
-130+ liquid stocks: SPY, QQQ, AAPL, MSFT, GOOGL, AMZN, META, TSLA, NVDA, AMD, MSTR, COIN, GME, and more.
+| `GET /api/options/{ticker}` | Full options chain with Greeks & Rev% |
+| `GET /api/history/{ticker}` | OHLCV + EMAs + RSI across timeframes |
+| `POST /api/ai-recommend` | AI analysis with Trading Plan |
 
 ## Disclaimer
 
