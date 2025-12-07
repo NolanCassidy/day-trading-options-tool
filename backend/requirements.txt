@@ -4,3 +4,5 @@ yfinance==0.2.33
 pandas==2.1.3
 python-dateutil==2.8.2
 scipy
+python-dotenv
+google-generativeai

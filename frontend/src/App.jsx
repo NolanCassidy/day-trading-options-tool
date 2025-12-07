@@ -1,12 +1,26 @@
-import React, { useState } from 'react'
+import React, { useState, useEffect } from 'react'
 import './index.css'
 import ProfitEstimator from './components/ProfitEstimator'
+import StockChart from './components/StockChart'
+import AIAdvisor from './components/AIAdvisor'
 
 const API_BASE = 'http://localhost:8000'
 
+// Parse URL hash for routing
+const getInitialState = () => {
+  const hash = window.location.hash.slice(1) // Remove #
+  if (hash.startsWith('scan')) {
+    return { view: 'scan', ticker: '' }
+  } else if (hash.startsWith('stock/')) {
+    return { view: 'stock', ticker: hash.replace('stock/', '').toUpperCase() }
+  }
+  return { view: 'home', ticker: '' }
+}
+
 function App() {
-  const [ticker, setTicker] = useState('')
-  const [searchTicker, setSearchTicker] = useState('')
+  const initialState = getInitialState()
+  const [ticker, setTicker] = useState(initialState.ticker)
+  const [searchTicker, setSearchTicker] = useState(initialState.ticker)
   const [quote, setQuote] = useState(null)
   const [topVolume, setTopVolume] = useState(null)
   const [scanResults, setScanResults] = useState(null)
@@ -19,6 +33,7 @@ function App() {
   const [scanning, setScanning] = useState(false)
   const [error, setError] = useState('')
   const [selectedOption, setSelectedOption] = useState(null)
+  const [showAIAdvisor, setShowAIAdvisor] = useState(false)
 
   // Filter state
   const [filters, setFilters] = useState({
@@ -30,6 +45,27 @@ function App() {
   })
   const [autoRefresh, setAutoRefresh] = useState(false)
   const [lastRefresh, setLastRefresh] = useState(null)
+
+  // On mount, auto-load from URL
+  useEffect(() => {
+    if (initialState.view === 'scan') {
+      handleScan()
+    } else if (initialState.view === 'stock' && initialState.ticker) {
+      setTicker(initialState.ticker)
+      handleSearch(null, initialState.ticker)
+    }
+  }, [])
+
+  // Update URL when state changes  
+  const updateURL = (view, tickerVal = '') => {
+    if (view === 'scan') {
+      window.history.replaceState(null, '', '#scan')
+    } else if (view === 'stock' && tickerVal) {
+      window.history.replaceState(null, '', `#stock/${tickerVal}`)
+    } else {
+      window.history.replaceState(null, '', '#')
+    }
+  }
 
   // Auto-refresh effect
   React.useEffect(() => {
@@ -86,6 +122,7 @@ function App() {
         const data = await res.json()
         setScanResults(data)
         setLastRefresh(new Date())
+        updateURL('scan')
         if (data.errors && data.errors.length > 0) {
           setError(`Some stocks failed: ${data.errors.join(', ')}`)
         }
@@ -151,15 +188,18 @@ function App() {
     }
   }
 
-  const handleSearch = (e) => {
-    e.preventDefault()
-    if (ticker.trim()) {
-      setSearchTicker(ticker.trim().toUpperCase())
+  const handleSearch = (e, tickerOverride = null) => {
+    if (e) e.preventDefault()
+    const searchFor = tickerOverride || ticker.trim()
+    if (searchFor) {
+      const upperTicker = searchFor.toUpperCase()
+      setSearchTicker(upperTicker)
       setSelectedExpiry('')
       setTopVolume(null)
       setOptions(null)
       setQuote(null)
-      fetchData(ticker.trim())
+      fetchData(searchFor)
+      updateURL('stock', upperTicker)
     }
   }
 
@@ -227,6 +267,16 @@ function App() {
         </div>
 
         <div className="header-actions">
+          {/* AI Advisor Button */}
+          {scanResults && (
+            <button
+              className="ai-btn"
+              onClick={() => setShowAIAdvisor(true)}
+            >
+              ai.analyze
+            </button>
+          )}
+
           {/* Market Scanner Button */}
           <button
             className="scan-btn"
@@ -454,6 +504,11 @@ function App() {
         </div>
       )}
 
+      {/* Stock Chart */}
+      {quote && searchTicker && (
+        <StockChart ticker={searchTicker} />
+      )}
+
       {/* TOP VOLUME OPTIONS */}
       {topVolume && topVolume.topCalls?.length > 0 && (
         <div className="options-section top-volume-section">
@@ -463,6 +518,33 @@ function App() {
               <span className="expiry-badge">
                 Expires: {topVolume.expiry} ({topVolume.daysToExpiry} day{topVolume.daysToExpiry !== 1 ? 's' : ''})
               </span>
+              <button
+                className="ai-btn"
+                onClick={() => {
+                  // Set up AI advisor with just this stock's options
+                  setScanResults({
+                    topCalls: topVolume.topCalls.map(c => ({
+                      ...c,
+                      ticker: topVolume.symbol,
+                      expiry: topVolume.expiry,
+                      daysToExpiry: topVolume.daysToExpiry,
+                      type: 'CALL',
+                      stockPrice: quote?.price,
+                    })),
+                    topPuts: topVolume.topPuts.map(p => ({
+                      ...p,
+                      ticker: topVolume.symbol,
+                      expiry: topVolume.expiry,
+                      daysToExpiry: topVolume.daysToExpiry,
+                      type: 'PUT',
+                      stockPrice: quote?.price,
+                    })),
+                  })
+                  setShowAIAdvisor(true)
+                }}
+              >
+                ai.scan({topVolume.symbol})
+              </button>
             </div>
             <div className="tabs">
               <button
@@ -536,6 +618,34 @@ function App() {
               >
                 All Puts ({options.puts?.length || 0})
               </button>
+              <button
+                className="ai-btn"
+                style={{ marginLeft: 'auto' }}
+                onClick={() => {
+                  const daysToExpiry = Math.ceil((new Date(selectedExpiry) - new Date()) / (1000 * 60 * 60 * 24))
+                  setScanResults({
+                    topCalls: (options.calls || []).slice(0, 30).map(c => ({
+                      ...c,
+                      ticker: searchTicker,
+                      expiry: selectedExpiry,
+                      daysToExpiry,
+                      type: 'CALL',
+                      stockPrice: quote?.price,
+                    })),
+                    topPuts: (options.puts || []).slice(0, 30).map(p => ({
+                      ...p,
+                      ticker: searchTicker,
+                      expiry: selectedExpiry,
+                      daysToExpiry,
+                      type: 'PUT',
+                      stockPrice: quote?.price,
+                    })),
+                  })
+                  setShowAIAdvisor(true)
+                }}
+              >
+                ai.analyze
+              </button>
             </div>
 
             <select
@@ -591,6 +701,24 @@ function App() {
           option={selectedOption}
           currentPrice={selectedOption.currentPrice || quote?.price || selectedOption.strike}
           onClose={() => setSelectedOption(null)}
+          onNavigate={(ticker) => {
+            setTicker(ticker)
+            handleSearch(null, ticker)
+          }}
+        />
+      )}
+
+      {/* AI Advisor Modal */}
+      {showAIAdvisor && scanResults && (
+        <AIAdvisor
+          scanResults={scanResults}
+          onClose={() => setShowAIAdvisor(false)}
+          onSelectOption={(opt) => {
+            setSelectedOption({
+              ...opt,
+              currentPrice: opt.stockPrice || opt.strike,
+            })
+          }}
         />
       )}
     </div>

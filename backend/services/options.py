@@ -10,6 +10,21 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from functools import lru_cache
 import math
 from scipy.stats import norm
+import os
+
+# Gemini AI setup
+try:
+    import google.generativeai as genai
+    from dotenv import load_dotenv
+    load_dotenv()
+    GEMINI_API_KEY = os.environ.get('GEMINI_API_KEY')
+    if GEMINI_API_KEY:
+        genai.configure(api_key=GEMINI_API_KEY)
+        GEMINI_AVAILABLE = True
+    else:
+        GEMINI_AVAILABLE = False
+except ImportError:
+    GEMINI_AVAILABLE = False
 
 # Simple cache with TTL
 _cache = {}
@@ -524,4 +539,358 @@ def scan_market_options(top_n_per_stock: int = 3) -> dict:
         "topPuts": all_puts[:50],    # Top 50 most active puts
         "errors": errors if errors else None
     }
+
+
+def calculate_ema(data: pd.Series, period: int) -> pd.Series:
+    """Calculate Exponential Moving Average"""
+    return data.ewm(span=period, adjust=False).mean()
+
+
+def calculate_rsi(data: pd.Series, period: int = 14) -> float:
+    """Calculate RSI (Relative Strength Index)"""
+    delta = data.diff()
+    gain = (delta.where(delta > 0, 0)).rolling(window=period).mean()
+    loss = (-delta.where(delta < 0, 0)).rolling(window=period).mean()
+    
+    rs = gain / loss
+    rsi = 100 - (100 / (1 + rs))
+    return round(rsi.iloc[-1], 1) if not pd.isna(rsi.iloc[-1]) else 50
+
+
+def calculate_atr(high: pd.Series, low: pd.Series, close: pd.Series, period: int = 14) -> float:
+    """Calculate Average True Range"""
+    tr1 = high - low
+    tr2 = abs(high - close.shift())
+    tr3 = abs(low - close.shift())
+    tr = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
+    atr = tr.rolling(window=period).mean()
+    return round(atr.iloc[-1], 2) if not pd.isna(atr.iloc[-1]) else 0
+
+
+def get_stock_history(ticker: str, period: str = "3mo", interval: str = "1d") -> dict:
+    """
+    Get stock price history with technical indicators.
+    
+    Args:
+        ticker: Stock symbol
+        period: 1d, 5d, 1mo, 3mo, 6mo, 1y
+        interval: 1m, 5m, 15m, 1h, 1d, 1wk, 1mo
+    """
+    try:
+        stock = yf.Ticker(ticker)
+        
+        # Get historical data
+        hist = stock.history(period=period, interval=interval)
+        
+        if hist.empty:
+            return {"error": "No historical data available", "ticker": ticker}
+        
+        # Calculate EMAs
+        close = hist['Close']
+        ema9 = calculate_ema(close, 9)
+        ema20 = calculate_ema(close, 20)
+        ema50 = calculate_ema(close, 50)
+        ema200 = calculate_ema(close, 200)
+        
+        # Calculate RSI
+        rsi = calculate_rsi(close)
+        
+        # Calculate ATR
+        atr = calculate_atr(hist['High'], hist['Low'], close)
+        
+        # Get 52-week high/low
+        try:
+            info = stock.info
+            week52_high = info.get('fiftyTwoWeekHigh', 0)
+            week52_low = info.get('fiftyTwoWeekLow', 0)
+            current_price = close.iloc[-1]
+            
+            pct_from_52high = round((current_price - week52_high) / week52_high * 100, 1) if week52_high else 0
+            pct_from_52low = round((current_price - week52_low) / week52_low * 100, 1) if week52_low else 0
+        except:
+            week52_high = 0
+            week52_low = 0
+            pct_from_52high = 0
+            pct_from_52low = 0
+        
+        # Get earnings date
+        try:
+            calendar = stock.calendar
+            if calendar is not None and not calendar.empty:
+                earnings_date = calendar.get('Earnings Date', [None])[0]
+                earnings_str = earnings_date.strftime('%Y-%m-%d') if earnings_date else None
+            else:
+                earnings_str = None
+        except:
+            earnings_str = None
+        
+        # Format OHLCV data for chart
+        candles = []
+        for idx, row in hist.iterrows():
+            timestamp = int(idx.timestamp()) if hasattr(idx, 'timestamp') else int(pd.Timestamp(idx).timestamp())
+            candles.append({
+                "time": timestamp,
+                "open": round(row['Open'], 2),
+                "high": round(row['High'], 2),
+                "low": round(row['Low'], 2),
+                "close": round(row['Close'], 2),
+                "volume": int(row['Volume']),
+                "ema9": round(ema9.loc[idx], 2) if not pd.isna(ema9.loc[idx]) else None,
+                "ema20": round(ema20.loc[idx], 2) if not pd.isna(ema20.loc[idx]) else None,
+                "ema50": round(ema50.loc[idx], 2) if not pd.isna(ema50.loc[idx]) else None,
+                "ema200": round(ema200.loc[idx], 2) if not pd.isna(ema200.loc[idx]) else None,
+            })
+        
+        return {
+            "ticker": ticker.upper(),
+            "period": period,
+            "interval": interval,
+            "candles": candles,
+            "indicators": {
+                "rsi": rsi,
+                "atr": atr,
+                "atrPercent": round(atr / current_price * 100, 2) if current_price else 0,
+                "week52High": round(week52_high, 2) if week52_high else 0,
+                "week52Low": round(week52_low, 2) if week52_low else 0,
+                "pctFrom52High": pct_from_52high,
+                "pctFrom52Low": pct_from_52low,
+                "earningsDate": earnings_str,
+                "currentPrice": round(current_price, 2) if current_price else 0,
+                "dayHigh": round(hist['High'].iloc[-1], 2),
+                "dayLow": round(hist['Low'].iloc[-1], 2),
+            }
+        }
+        
+    except Exception as e:
+        return {"error": str(e), "ticker": ticker}
+
+
+def detect_unusual_activity(ticker: str) -> dict:
+    """Detect unusual options activity by comparing current volume to average"""
+    try:
+        result = get_top_volume_options(ticker, top_n=5)
+        if result.get('error'):
+            return result
+        
+        # Calculate avg volume for options (simplified - compare to OI)
+        unusual_calls = []
+        unusual_puts = []
+        
+        for opt in result.get('topCalls', []):
+            vol_oi = opt.get('volOiRatio', 0)
+            if vol_oi >= 2.0:  # Volume is 2x+ open interest
+                unusual_calls.append({
+                    **opt,
+                    "unusualScore": round(vol_oi, 1),
+                    "signal": "🔥 High" if vol_oi >= 5 else "⚡ Elevated"
+                })
+        
+        for opt in result.get('topPuts', []):
+            vol_oi = opt.get('volOiRatio', 0)
+            if vol_oi >= 2.0:
+                unusual_puts.append({
+                    **opt,
+                    "unusualScore": round(vol_oi, 1),
+                    "signal": "🔥 High" if vol_oi >= 5 else "⚡ Elevated"
+                })
+        
+        return {
+            "ticker": ticker,
+            "unusualCalls": unusual_calls,
+            "unusualPuts": unusual_puts,
+            "hasUnusualActivity": len(unusual_calls) > 0 or len(unusual_puts) > 0
+        }
+    except Exception as e:
+        return {"error": str(e), "ticker": ticker}
+
+
+def get_ai_recommendation(options_data: dict, market_context: dict = None) -> dict:
+    """
+    Generate AI recommendation for best option trade using Gemini API.
+    Gemini analyzes ALL options and picks the best one.
+    """
+    try:
+        calls = options_data.get('topCalls', [])[:20]  # Send more options for AI to analyze
+        puts = options_data.get('topPuts', [])[:20]
+        
+        if not calls and not puts:
+            return {"error": "No options data to analyze"}
+        
+        print(f"[AI] GEMINI_AVAILABLE = {GEMINI_AVAILABLE}")
+        
+        if GEMINI_AVAILABLE:
+            try:
+                print(f"[AI] Calling Gemini with {len(calls)} calls and {len(puts)} puts...")
+                model = genai.GenerativeModel('gemini-2.5-flash')
+                
+                # Get unique tickers and fetch their stock data
+                all_tickers = set([c.get('ticker') for c in calls] + [p.get('ticker') for p in puts])
+                stock_data = {}
+                for ticker in list(all_tickers)[:10]:  # Limit to 10 stocks for speed
+                    try:
+                        hist = get_stock_history(ticker, period="1mo", interval="1d")
+                        if not hist.get('error'):
+                            ind = hist.get('indicators', {})
+                            stock_data[ticker] = {
+                                'price': ind.get('currentPrice'),
+                                'rsi': ind.get('rsi'),
+                                'atr': ind.get('atr'),
+                                'atrPct': ind.get('atrPercent'),
+                                'dayHigh': ind.get('dayHigh'),
+                                'dayLow': ind.get('dayLow'),
+                                '52wkHigh': ind.get('week52High'),
+                                '52wkLow': ind.get('week52Low'),
+                                'pctFrom52High': ind.get('pctFrom52High'),
+                                'pctFrom52Low': ind.get('pctFrom52Low'),
+                            }
+                    except:
+                        pass
+                
+                # Format stock data section
+                stock_info = []
+                for ticker, data in stock_data.items():
+                    stock_info.append(f"{ticker}: Price ${data.get('price'):.2f} | RSI {data.get('rsi')} | ATR ${data.get('atr')} ({data.get('atrPct')}%) | Day Range ${data.get('dayLow')}-${data.get('dayHigh')} | 52wk Range ${data.get('52wkLow')}-${data.get('52wkHigh')} ({data.get('pctFrom52High')}% from high)")
+                stock_section = chr(10).join(stock_info) if stock_info else "Stock data unavailable"
+                
+                # Format all options for Gemini to analyze
+                all_options = []
+                for i, c in enumerate(calls):
+                    all_options.append(f"{i+1}. CALL {c.get('ticker')} ${c.get('strike')} exp:{c.get('expiry')} | Price:${c.get('lastPrice'):.2f} Δ:{c.get('delta')} γ:{c.get('gamma')} Score:{c.get('scalpScore')} Rev%:{c.get('reversalPct')}%")
+                for i, p in enumerate(puts):
+                    all_options.append(f"{i+1+len(calls)}. PUT {p.get('ticker')} ${p.get('strike')} exp:{p.get('expiry')} | Price:${p.get('lastPrice'):.2f} Δ:{p.get('delta')} γ:{p.get('gamma')} Score:{p.get('scalpScore')} Rev%:{p.get('reversalPct')}%")
+                
+                options_list = chr(10).join(all_options)
+                
+                prompt = f"""You are an expert options day trader specializing in quick scalping plays. Analyze ALL these options and pick THE SINGLE BEST one for a quick scalp trade (hold for minutes to hours).
+
+STOCK TECHNICAL DATA:
+{stock_section}
+
+OPTIONS TO ANALYZE:
+{options_list}
+
+CRITERIA TO CONSIDER:
+- RSI < 30 = oversold (good for calls), RSI > 70 = overbought (good for puts)
+- Stock near day low = potential bounce (calls), near day high = potential fade (puts)
+- High scalp score = better short-term profit potential
+- High reversal % = stock is far from its day high/low, room to move
+- Delta near 0.5 = most responsive to price movement
+- High gamma = explosive profit potential on small moves
+- Lower option price = less capital at risk
+
+RESPOND IN THIS EXACT FORMAT:
+PICK: [number from list above]
+TICKER: [symbol]
+TYPE: [CALL or PUT]  
+STRIKE: [price]
+REASONING: [2-3 sentences explaining why this specific option is the best pick. Reference the stock's RSI, price action relative to day range, and option Greeks. Be specific!]
+CONFIDENCE: [HIGH, MEDIUM, or LOW]"""
+
+                response = model.generate_content(prompt)
+                ai_text = response.text.strip()
+                print(f"[AI] Gemini response:\n{ai_text}")
+                
+                # Parse the response
+                lines = ai_text.split('\n')
+                pick_num = None
+                reasoning = ""
+                confidence = "medium"
+                
+                for line in lines:
+                    line = line.strip()
+                    if line.startswith('PICK:'):
+                        try:
+                            pick_num = int(line.replace('PICK:', '').strip().split()[0]) - 1
+                        except:
+                            pass
+                    elif line.startswith('REASONING:'):
+                        reasoning = line.replace('REASONING:', '').strip()
+                    elif line.startswith('CONFIDENCE:'):
+                        conf = line.replace('CONFIDENCE:', '').strip().lower()
+                        if 'high' in conf:
+                            confidence = 'high'
+                        elif 'low' in conf:
+                            confidence = 'low'
+                        else:
+                            confidence = 'medium'
+                
+                # Get the picked option
+                all_opts = calls + puts
+                if pick_num is not None and 0 <= pick_num < len(all_opts):
+                    recommendation = all_opts[pick_num]
+                else:
+                    # Fallback to highest score if parsing failed
+                    recommendation = max(all_opts, key=lambda x: x.get('scalpScore', 0))
+                    reasoning = reasoning or f"Selected based on highest scalp score of {recommendation.get('scalpScore')}."
+                
+                # Get runner-up picks (top 4 by score, excluding main pick)
+                sorted_opts = sorted(all_opts, key=lambda x: x.get('scalpScore', 0), reverse=True)
+                runner_ups = []
+                for opt in sorted_opts[:6]:
+                    if opt.get('contractSymbol') != recommendation.get('contractSymbol'):
+                        runner_ups.append({
+                            "ticker": opt.get('ticker'),
+                            "type": opt.get('type'),
+                            "strike": opt.get('strike'),
+                            "expiry": opt.get('expiry'),
+                            "price": opt.get('lastPrice'),
+                            "scalpScore": opt.get('scalpScore'),
+                            "reversalPct": opt.get('reversalPct'),
+                            "delta": opt.get('delta'),
+                            "gamma": opt.get('gamma'),
+                            "daysToExpiry": opt.get('daysToExpiry'),
+                        })
+                        if len(runner_ups) >= 4:
+                            break
+                
+                return {
+                    "recommendation": {
+                        "ticker": recommendation.get('ticker'),
+                        "type": recommendation.get('type'),
+                        "strike": recommendation.get('strike'),
+                        "expiry": recommendation.get('expiry'),
+                        "price": recommendation.get('lastPrice'),
+                        "scalpScore": recommendation.get('scalpScore'),
+                        "reversalPct": recommendation.get('reversalPct'),
+                        "delta": recommendation.get('delta'),
+                        "gamma": recommendation.get('gamma'),
+                        "daysToExpiry": recommendation.get('daysToExpiry'),
+                    },
+                    "runnerUps": runner_ups,
+                    "reasoning": reasoning or "AI analysis did not provide detailed reasoning.",
+                    "confidence": confidence,
+                    "disclaimer": "This is AI-assisted analysis, not financial advice. Always do your own research.",
+                    "aiPowered": True
+                }
+                    
+            except Exception as e:
+                print(f"[AI] Gemini error: {e}")
+                # Fall through to algorithmic fallback
+        
+        # Fallback: algorithmic selection
+        print("[AI] Using algorithmic fallback")
+        all_opts = calls + puts
+        recommendation = max(all_opts, key=lambda x: x.get('scalpScore', 0))
+        
+        return {
+            "recommendation": {
+                "ticker": recommendation.get('ticker'),
+                "type": recommendation.get('type'),
+                "strike": recommendation.get('strike'),
+                "expiry": recommendation.get('expiry'),
+                "price": recommendation.get('lastPrice'),
+                "scalpScore": recommendation.get('scalpScore'),
+                "reversalPct": recommendation.get('reversalPct'),
+                "delta": recommendation.get('delta'),
+                "gamma": recommendation.get('gamma'),
+            },
+            "reasoning": f"This {recommendation.get('type')} on {recommendation.get('ticker')} has the highest scalp score of {recommendation.get('scalpScore')} with {recommendation.get('reversalPct')}% reversal potential.",
+            "confidence": "medium",
+            "disclaimer": "This is algorithmic analysis, not financial advice. Always do your own research.",
+            "aiPowered": False
+        }
+        
+    except Exception as e:
+        print(f"[AI] Error: {e}")
+        return {"error": str(e)}
 

@@ -4,8 +4,13 @@ FastAPI backend for Options Trading Dashboard
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from typing import Optional
+from pydantic import BaseModel
 
-from services.options import get_stock_quote, get_options_chain, get_top_volume_options, scan_market_options
+from services.options import (
+    get_stock_quote, get_options_chain, get_top_volume_options, 
+    scan_market_options, get_stock_history, detect_unusual_activity,
+    get_ai_recommendation
+)
 
 app = FastAPI(
     title="Options Trading API",
@@ -66,6 +71,44 @@ async def market_scan():
         return data
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Error scanning market: {str(e)}")
+
+
+@app.get("/api/history/{ticker}")
+async def stock_history(ticker: str, period: str = "3mo", interval: str = "1d"):
+    """Get stock price history with EMAs and technical indicators"""
+    try:
+        data = get_stock_history(ticker.upper(), period, interval)
+        return data
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Error fetching history for {ticker}: {str(e)}")
+
+
+@app.get("/api/unusual/{ticker}")
+async def unusual_activity(ticker: str):
+    """Detect unusual options activity"""
+    try:
+        data = detect_unusual_activity(ticker.upper())
+        return data
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Error detecting unusual activity for {ticker}: {str(e)}")
+
+
+class AIRecommendRequest(BaseModel):
+    topCalls: list = []
+    topPuts: list = []
+
+
+@app.post("/api/ai-recommend")
+async def ai_recommend(request: AIRecommendRequest):
+    """Get AI-powered trade recommendation based on scan results"""
+    try:
+        data = get_ai_recommendation({
+            "topCalls": request.topCalls,
+            "topPuts": request.topPuts
+        })
+        return data
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Error generating recommendation: {str(e)}")
 
 
 if __name__ == "__main__":

@@ -1,151 +1,99 @@
-# 📈 Options Scanner Pro - Real-Time Options Trading Tool
+# Options Scanner Pro
 
-> **Advanced Options Scanner with Greeks, Profit Estimator & Scalping Metrics**
+> Advanced Options Scanner with AI-Powered Trade Recommendations, Interactive Charts & Real-Time Greeks
 
-A powerful, real-time options trading scanner and profit calculator built for day traders, scalpers, and options traders. Scan 100+ stocks instantly, identify high-probability trades with Greeks analysis, and estimate profits with an interactive P&L calculator.
+Scan 100+ stocks, get AI trade recommendations, analyze with interactive candlestick charts, and estimate profits with Black-Scholes pricing.
 
-![Options Scanner](https://img.shields.io/badge/Options-Scanner-green) ![Day Trading](https://img.shields.io/badge/Day-Trading-blue) ![Greeks](https://img.shields.io/badge/Greeks-Calculator-orange) ![React](https://img.shields.io/badge/React-18-61dafb) ![Python](https://img.shields.io/badge/Python-FastAPI-3776ab)
+![Options Scanner](https://img.shields.io/badge/Options-Scanner-00d26a) ![AI Powered](https://img.shields.io/badge/AI-Gemini-4a9eff) ![React](https://img.shields.io/badge/React-18-61dafb) ![Python](https://img.shields.io/badge/Python-FastAPI-3776ab)
 
-## 🚀 Features
+## Features
+
+### AI Trade Advisor
+- **Gemini AI-powered** trade recommendations
+- Analyzes 40+ options with stock technicals (RSI, ATR, 52-week data)
+- Returns **top pick + 4 runner-ups**
+- Click any recommendation → opens Profit Estimator
+- Works on scanner results AND individual stock pages
+
+### Interactive Stock Charts
+- **Candlestick charts** with lightweight-charts v5
+- **Intraday timeframes**: 1M, 5M, 15M for day trading
+- **Daily timeframes**: 5D, 1MO, 3MO, 6MO, 1Y
+- **Toggleable EMAs**: 9, 20, 50, 200
+- **Volume bars** with up/down coloring
+- **Indicator badges**: RSI, ATR, 52-week proximity, earnings dates
 
 ### Market Scanner
-- **Scan 100+ stocks** simultaneously with parallel processing (~15 seconds)
-- **Real-time options data** from Yahoo Finance (no API key needed)
-- **Scalp Score™** - proprietary ranking system for identifying best scalping opportunities
-- Filter by price, spread, volume, days to expiration (DTE)
+- Scan **100+ liquid stocks** in ~15 seconds
+- **Scalp Score™** ranking algorithm
+- **Greeks**: Delta, Gamma, Theta, Vega
+- **Reversal %**: Profit potential if stock reverts to day high/low
+- Filter by price, spread, volume, DTE
 - Auto-refresh every 30 seconds
 
-### Options Greeks
-- **Delta (Δ)** - Price sensitivity to stock movement
-- **Gamma (γ)** - Rate of delta change (momentum indicator)
-- **Theta (Θ)** - Time decay per day
-- **Vega (ν)** - Implied volatility sensitivity
+### Profit Estimator
+- **Interactive P&L chart** with hover line
+- **Time slider** with 30-min increments
+- **Click ticker** → navigates to stock page
+- **Quick scenarios**: ±5%, ±10%, breakeven
+- Black-Scholes option pricing
 
-### Scalping Metrics
-- **Reversal Profit %** - Potential gain if stock reverts to day high/low
-- **Volume/OI Ratio** - Unusual activity detector
-- **Day High/Low** - Intraday range for reversal trades
-- **Bid-Ask Spread** - Color-coded for quick assessment
+### UX Improvements
+- **URL routing**: Refresh preserves current page (`#scan`, `#stock/SPY`)
+- **Hacker-style UI**: Minimal buttons, monospace fonts, green accents
+- **Dark mode** trading interface
 
-### Profit Estimator Modal
-- **Interactive P&L Chart** - Hover to see profit at any price
-- **Time Slider** - Estimate profits at any point before expiration
-- **% Returns Display** - See percentage gains alongside dollar amounts
-- **Quick Scenarios** - +5%, +10%, -5%, breakeven calculations
-- **Black-Scholes Pricing** - Industry-standard option valuation
-
-## 📸 Screenshots
-
-Coming soon...
-
-## 🎯 Perfect For
-
-- **Day Traders** - Quick scalp plays with tight spreads
-- **Options Scalpers** - Find high-gamma opportunities for explosive moves
-- **Swing Traders** - Identify options for multi-day holds
-- **0DTE Traders** - Filter for same-day expiration plays
-- **Momentum Traders** - Track unusual volume and activity
-
-## 🛠️ Tech Stack
-
-**Frontend:**
-- React 18 + Vite
-- Interactive charts and P&L visualization
-- Real-time data updates
-- Dark mode trading interface
-
-**Backend:**
-- Python FastAPI
-- Black-Scholes Greeks calculation
-- Parallel stock scanning with ThreadPoolExecutor
-- Yahoo Finance data via yfinance
-
-## 📦 Installation
-
-### Prerequisites
-- Node.js 18+
-- Python 3.9+
-
-### Quick Start
+## Quick Start
 
 ```bash
-# Clone the repository
-git clone https://github.com/yourusername/options-scanner-pro.git
-cd options-scanner-pro
-
-# Backend setup
+# Backend
 cd backend
 pip install -r requirements.txt
-python main.py
+GEMINI_API_KEY=your_key python main.py
 
-# Frontend setup (new terminal)
+# Frontend  
 cd frontend
 npm install
 npm run dev
 ```
 
-Open http://localhost:5173 in your browser.
+Open http://localhost:5173
 
-## 📊 Stocks Covered
+## Environment Variables
 
-Scans **130+ liquid stocks** including:
+Create `backend/.env`:
+```
+GEMINI_API_KEY=your_gemini_api_key
+```
 
-- **Index ETFs**: SPY, QQQ, IWM, DIA, VXX, TQQQ, SQQQ, SOXL
-- **Mega-Cap Tech**: AAPL, MSFT, GOOGL, AMZN, META, TSLA, NVDA
-- **Semiconductors**: AMD, NVDA, MU, ASML, TSM, AVGO
-- **Bitcoin/Crypto**: MSTR, COIN, MARA, RIOT, IBIT, GBTC
-- **Financials**: JPM, BAC, GS, V, MA
-- **Meme Stocks**: GME, AMC, SOFI, HOOD
-- **Leveraged ETFs**: TQQQ, SQQQ, SOXL, SOXS, UVXY
+## Tech Stack
 
-## 🔧 API Endpoints
+- **Frontend**: React 18, Vite, lightweight-charts v5
+- **Backend**: Python FastAPI, yfinance, google-generativeai
+- **AI**: Gemini 3 Pro for trade analysis
+
+## API Endpoints
 
 | Endpoint | Description |
 |----------|-------------|
-| `GET /api/scan` | Scan all stocks, returns top 50 options by scalp score |
-| `GET /api/quote/{ticker}` | Get stock quote with price, change, volume |
-| `GET /api/options/{ticker}` | Full options chain for a ticker |
-| `GET /api/top-volume/{ticker}` | Top volume options with Greeks |
+| `GET /api/scan` | Scan all stocks, returns top 50 by scalp score |
+| `GET /api/quote/{ticker}` | Stock quote with price, change, volume |
+| `GET /api/options/{ticker}` | Full options chain |
+| `GET /api/history/{ticker}` | OHLCV + EMAs + RSI + ATR + 52wk |
+| `POST /api/ai-recommend` | AI-powered trade recommendation |
 
-## 📈 Scalp Score Algorithm
+## Stocks Covered
 
-The proprietary Scalp Score™ ranks options for quick-profit potential:
+130+ liquid stocks: SPY, QQQ, AAPL, MSFT, GOOGL, AMZN, META, TSLA, NVDA, AMD, MSTR, COIN, GME, and more.
 
-```
-Score = (Gamma × 1000) + (Vol/OI Ratio × 5) - (Spread% × 10) + ATM Bonus
-```
+## Disclaimer
 
-- **High Gamma** = More explosive moves
-- **High Vol/OI** = Unusual activity
-- **Tight Spreads** = Less slippage
-- **ATM Options** = Most responsive to price changes
+For educational purposes only. Options trading involves significant risk. Always do your own research.
 
-## 🎓 How to Use
+## License
 
-1. **Click "Scan Market"** to find top options across 130+ stocks
-2. **Sort by Score** - Higher scores = better scalp opportunities
-3. **Check Rev%** - Reversal profit if stock returns to high/low
-4. **Click any option** to open the Profit Estimator
-5. **Adjust time slider** to see P&L at different sell times
-6. **Hover the chart** to explore profit at various stock prices
-
-## ⚠️ Disclaimer
-
-This tool is for educational and informational purposes only. Options trading involves significant risk of loss. Past performance does not guarantee future results. Always do your own research and consider consulting a financial advisor.
-
-## 🤝 Contributing
-
-Contributions welcome! Please feel free to submit a Pull Request.
-
-## 📝 License
-
-MIT License - feel free to use this for personal or commercial projects.
-
-## 🔗 Keywords
-
-Options trading, options scanner, options screener, day trading, scalping, options greeks, delta, gamma, theta, vega, profit calculator, P&L estimator, stock options, call options, put options, 0DTE, zero days to expiration, options chain, implied volatility, IV, bid ask spread, options volume, open interest, Black-Scholes, option pricing, SPY options, QQQ options, TSLA options, NVDA options, AMD options, meme stocks, trading tools, fintech, React, Python, FastAPI, yfinance
+MIT
 
 ---
 
-**Built with ❤️ for traders**
-
+**Built for traders**

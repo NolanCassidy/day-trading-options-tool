@@ -64,7 +64,7 @@ function estimateOptionValue(optionType, strike, stockPrice, hoursToExpiry, iv, 
 // Convert days to trading hours (6.5 hours per trading day)
 const TRADING_HOURS_PER_DAY = 6.5
 
-function ProfitEstimator({ option, currentPrice, onClose }) {
+function ProfitEstimator({ option, currentPrice, onClose, onNavigate }) {
     const totalHours = (option.daysToExpiry || 1) * TRADING_HOURS_PER_DAY
     const [hoursToSell, setHoursToSell] = useState(Math.floor(totalHours / 2))
     const [hoveredPrice, setHoveredPrice] = useState(null)
@@ -232,7 +232,21 @@ function ProfitEstimator({ option, currentPrice, onClose }) {
                         <span className={`option-type ${option.type?.toLowerCase() || 'call'}`}>
                             {option.type || 'CALL'}
                         </span>
-                        <h2>{option.ticker || 'Option'} ${option.strike}</h2>
+                        <h2>
+                            <span
+                                className="ticker-link"
+                                onClick={() => {
+                                    if (onNavigate && option.ticker) {
+                                        onNavigate(option.ticker)
+                                        onClose()
+                                    }
+                                }}
+                                style={{ cursor: option.ticker ? 'pointer' : 'default' }}
+                            >
+                                {option.ticker || 'Option'}
+                            </span>
+                            {' '}${option.strike}
+                        </h2>
                         <span className="modal-expiry">{option.expiry}</span>
                     </div>
                     <button className="close-btn" onClick={onClose}>×</button>
@@ -304,6 +318,16 @@ function ProfitEstimator({ option, currentPrice, onClose }) {
                                 className="zero-line"
                                 style={{ bottom: `${(maxY - maxLoss) / (maxY * 2) * 100}%` }}
                             />
+
+                            {/* Hover price marker */}
+                            {hoveredPrice && chartData.length > 0 && (
+                                <div
+                                    className="marker-line hover"
+                                    style={{
+                                        left: `${((hoveredPrice - chartData[0]?.stockPrice) / (chartData[chartData.length - 1]?.stockPrice - chartData[0]?.stockPrice)) * 100}%`
+                                    }}
+                                />
+                            )}
 
                             {/* Current price marker */}
                             <div
