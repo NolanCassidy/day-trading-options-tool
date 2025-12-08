@@ -1,0 +1,34 @@
+# Production docker-compose - pulls pre-built images from GitHub Container Registry
+# Use this on machines that should auto-update via Watchtower
+
+services:
+  backend:
+    image: ghcr.io/nolancassidy/day-trading-options-tool/backend:latest
+    container_name: options-backend
+    restart: always
+    network_mode: host
+    environment:
+      - PYTHONUNBUFFERED=1
+    env_file:
+      - path: ./backend/.env
+        required: false
+
+  frontend:
+    image: ghcr.io/nolancassidy/day-trading-options-tool/frontend:latest
+    container_name: options-frontend
+    restart: always
+    ports:
+      - "8420:80"
+
+  watchtower:
+    image: containrrr/watchtower
+    container_name: watchtower
+    restart: always
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ~/.docker/config.json:/config.json:ro
+    environment:
+      - WATCHTOWER_CLEANUP=true
+      - WATCHTOWER_POLL_INTERVAL=300
+      - WATCHTOWER_INCLUDE_RESTARTING=true
+    command: --interval 300 options-backend options-frontend
