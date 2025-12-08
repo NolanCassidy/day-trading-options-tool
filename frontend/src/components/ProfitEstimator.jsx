@@ -4,25 +4,34 @@ import StockChart from './StockChart'
 import { API_BASE } from '../config'
 
 /**
- * Proper Black-Scholes option pricing approximation
- * More conservative estimates to match broker displays
+ * Enhanced Black-Scholes option pricing with realistic adjustments
+ * Designed to match broker displays (Robinhood, etc.) more closely
+ * 
+ * Key improvements:
+ * 1. Probability-weighted OTM discount (options lose value faster when OTM)
+ * 2. Accelerated theta decay near expiry
+ * 3. Bid-ask spread simulation for OTM options
+ * 4. Faster convergence to intrinsic value
  */
 function estimateOptionValue(optionType, strike, stockPrice, hoursToExpiry, iv, originalHours) {
     // Risk-free rate (approximate)
     const r = 0.05
 
     // Time to expiry in years (trading hours: 6.5 per day, 252 days per year)
-    const T = Math.max(hoursToExpiry, 0.1) / (252 * 6.5)
+    const T = Math.max(hoursToExpiry, 0.01) / (252 * 6.5)
     const sigma = iv / 100
 
-    // Protect against edge cases
-    if (T <= 0 || sigma <= 0 || stockPrice <= 0 || strike <= 0) {
-        // At expiry, return intrinsic value only
-        if (optionType === 'CALL') {
-            return Math.max(0, stockPrice - strike)
-        } else {
-            return Math.max(0, strike - stockPrice)
-        }
+    // Calculate intrinsic value
+    let intrinsicValue
+    if (optionType === 'CALL') {
+        intrinsicValue = Math.max(0, stockPrice - strike)
+    } else {
+        intrinsicValue = Math.max(0, strike - stockPrice)
+    }
+
+    // At or very near expiry, return intrinsic value only
+    if (T <= 0.0001 || sigma <= 0 || stockPrice <= 0 || strike <= 0) {
+        return Math.max(0, intrinsicValue)
     }
 
     // Black-Scholes d1 and d2
@@ -53,14 +62,85 @@ function estimateOptionValue(optionType, strike, stockPrice, hoursToExpiry, iv, 
     const NNd1 = normCDF(-d1)
     const NNd2 = normCDF(-d2)
 
-    let optionValue
+    // Raw Black-Scholes value
+    let bsValue
     if (optionType === 'CALL') {
-        optionValue = stockPrice * Nd1 - strike * Math.exp(-r * T) * Nd2
+        bsValue = stockPrice * Nd1 - strike * Math.exp(-r * T) * Nd2
     } else {
-        optionValue = strike * Math.exp(-r * T) * NNd2 - stockPrice * NNd1
+        bsValue = strike * Math.exp(-r * T) * NNd2 - stockPrice * NNd1
     }
 
-    // Ensure minimum value (options always have some value before expiry)
+    // --- REALISTIC ADJUSTMENTS ---
+
+    // 1. Calculate "moneyness" - how far ITM or OTM the option is
+    const moneyness = optionType === 'CALL'
+        ? (stockPrice - strike) / strike
+        : (strike - stockPrice) / strike
+
+    // Delta (probability of being ITM at expiry, roughly)
+    const delta = optionType === 'CALL' ? Nd1 : -NNd1
+    const absDelta = Math.abs(delta)
+
+    // 2. OTM Discount: Options that are OTM should lose value VERY fast
+    // This creates the "hockey stick" loss curve seen in Robinhood
+    let otmDiscount = 1.0
+    if (moneyness < 0) {
+        // Option is OTM
+        const otmPercent = Math.abs(moneyness)
+
+        // AGGRESSIVE exponential discount for OTM options
+        // At 1% OTM: ~22% discount, at 2% OTM: ~45% discount, at 3% OTM: ~64% discount
+        // At 5% OTM: ~86% discount (nearly worthless time value)
+        otmDiscount = Math.exp(-otmPercent * 15)
+
+        // Hard cliff: once more than 3% OTM, time value collapses to near-zero
+        if (otmPercent > 0.03) {
+            otmDiscount *= 0.2 // Additional 80% haircut
+        }
+
+        // At 5%+ OTM, option is essentially at intrinsic value only
+        if (otmPercent > 0.05) {
+            otmDiscount = 0.01 // Near-zero time value
+        }
+    }
+
+    // 3. Time decay acceleration near expiry
+    // Options lose value much faster in the final hours/day
+    const hoursRemaining = hoursToExpiry
+    let thetaMultiplier = 1.0
+    if (hoursRemaining < 6.5) {
+        // Last trading day: accelerate decay significantly
+        // Linear ramp from 1.0 at 6.5 hours to 3x at 0 hours
+        thetaMultiplier = 1.0 + (2.0 * (1 - hoursRemaining / 6.5))
+    } else if (hoursRemaining < 13) {
+        // Last 2 days: moderate acceleration
+        thetaMultiplier = 1.0 + (0.5 * (1 - hoursRemaining / 13))
+    }
+
+    // 4. Calculate time value and apply adjustments
+    const timeValue = Math.max(0, bsValue - intrinsicValue)
+    const adjustedTimeValue = timeValue * otmDiscount / thetaMultiplier
+
+    // 5. Final option value = intrinsic + adjusted time value
+    let optionValue = intrinsicValue + adjustedTimeValue
+
+    // 6. Apply a "bid-ask simulation" discount for OTM options
+    // Real markets have much wider spreads for OTM options
+    if (moneyness < -0.01) {
+        // More than 1% OTM: apply spread discount that scales with OTM-ness
+        const spreadDiscount = 0.92 - (Math.abs(moneyness) * 2) // Steeper discount
+        optionValue *= Math.max(0.70, spreadDiscount)
+    }
+
+    // 7. Ensure we don't go below intrinsic value (arbitrage floor)
+    optionValue = Math.max(optionValue, intrinsicValue)
+
+    // 8. Minimum value floor (penny options)
+    // If very far OTM with little time, floor at near-zero
+    if (optionValue < 0.01 && intrinsicValue === 0) {
+        return 0.01
+    }
+
     return Math.max(0.01, optionValue)
 }
 

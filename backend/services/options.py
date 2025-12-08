@@ -1176,6 +1176,7 @@ def get_ai_recommendation(options_data: dict, market_context: dict = None) -> di
     Generate AI recommendation for best option trade using Gemini API.
     Gemini analyzes ALL options and picks the best one.
     """
+    import traceback
     try:
         # Get ALL options (don't slice yet)
         raw_calls = options_data.get('topCalls', [])
@@ -1196,29 +1197,29 @@ def get_ai_recommendation(options_data: dict, market_context: dict = None) -> di
                 return False
 
         # Filter FIRST, then slice
-        filtered_calls = [c for c in raw_calls if is_tradeable(c)]
-        filtered_puts = [p for p in raw_puts if is_tradeable(p)]
+        filtered_calls_list = [c for c in raw_calls if is_tradeable(c)]
+        filtered_puts_list = [p for p in raw_puts if is_tradeable(p)]
         
         # Sort by Scalp Score (descending) before slicing
         # This prioritizes the "best" technical setups within the tradeable range
-        filtered_calls.sort(key=lambda x: x.get('scalpScore', 0) or 0, reverse=True)
-        filtered_puts.sort(key=lambda x: x.get('scalpScore', 0) or 0, reverse=True)
+        filtered_calls_list.sort(key=lambda x: x.get('scalpScore', 0) or 0, reverse=True)
+        filtered_puts_list.sort(key=lambda x: x.get('scalpScore', 0) or 0, reverse=True)
 
         # If filtering removes too many, fallback to:
         # 1. Widen filter? 
         # 2. Just take the ones closest to ATM (Delta ~0.5)?
         # For now, if empty, we take the middle of the raw list (likely ATM)
-        if len(filtered_calls) < 3 and len(raw_calls) > 10:
+        if len(filtered_calls_list) < 3 and len(raw_calls) > 10:
              mid = len(raw_calls) // 2
-             filtered_calls = raw_calls[max(0, mid-5):min(len(raw_calls), mid+5)]
+             filtered_calls_list = raw_calls[max(0, mid-5):min(len(raw_calls), mid+5)]
         
-        if len(filtered_puts) < 3 and len(raw_puts) > 10:
+        if len(filtered_puts_list) < 3 and len(raw_puts) > 10:
              mid = len(raw_puts) // 2
-             filtered_puts = raw_puts[max(0, mid-5):min(len(raw_puts), mid+5)]
+             filtered_puts_list = raw_puts[max(0, mid-5):min(len(raw_puts), mid+5)]
         
         # Now take top candidates for AI
-        ai_calls = filtered_calls[:10]
-        ai_puts = filtered_puts[:10]
+        ai_calls = filtered_calls_list[:10]
+        ai_puts = filtered_puts_list[:10]
 
         if not ai_calls and not ai_puts:
             # Last resort fallback
@@ -1248,25 +1249,25 @@ def get_ai_recommendation(options_data: dict, market_context: dict = None) -> di
                         pass
                 
                 # Format stock data section with multi-timeframe info
-                stock_info = []
+                stock_info_lines = []
                 for ticker, tf_data in stock_data.items():
                     info = [f"=== {ticker} MULTI-TIMEFRAME ANALYSIS ==="]
                     for tf, data in tf_data.items():
                         if "error" not in data:
                             info.append(f"[{tf}] Trend:{data.get('trend')} | Price:${data.get('price')} | RSI:{data.get('rsi')} | Change:{data.get('change')}%")
-                    stock_info.append(" | ".join(info))
+                    stock_info_lines.append(" | ".join(info))
                 
-                stock_section = chr(10).join(stock_info) if stock_info else "Stock data unavailable"
+                stock_section = chr(10).join(stock_info_lines) if stock_info_lines else "Stock data unavailable"
                 
                 # Format options for the prompt
-                all_options = []
-                for i, c in enumerate(filtered_calls[:8]):
-                     all_options.append(f"{i+1}. CALL {c.get('ticker')} ${c.get('strike')} exp:{c.get('expiry')} | Price:${c.get('lastPrice'):.2f} Δ:{c.get('delta')} γ:{c.get('gamma')} Score:{c.get('scalpScore')} Rev%:{c.get('reversalPct')}%")
+                all_options_list = []
+                for i, c in enumerate(ai_calls[:8]):
+                     all_options_list.append(f"{i+1}. CALL {c.get('ticker')} ${c.get('strike')} exp:{c.get('expiry')} | Price:${c.get('lastPrice'):.2f} Δ:{c.get('delta')} γ:{c.get('gamma')} Score:{c.get('scalpScore')} Rev%:{c.get('reversalPct')}%")
                 
-                for i, p in enumerate(filtered_puts[:8]):
-                     all_options.append(f"{i+1+len(filtered_calls[:8])}. PUT {p.get('ticker')} ${p.get('strike')} exp:{p.get('expiry')} | Price:${p.get('lastPrice'):.2f} Δ:{p.get('delta')} γ:{p.get('gamma')} Score:{p.get('scalpScore')} Rev%:{p.get('reversalPct')}%")
+                for i, p in enumerate(ai_puts[:8]):
+                     all_options_list.append(f"{i+1+len(ai_calls[:8])}. PUT {p.get('ticker')} ${p.get('strike')} exp:{p.get('expiry')} | Price:${p.get('lastPrice'):.2f} Δ:{p.get('delta')} γ:{p.get('gamma')} Score:{p.get('scalpScore')} Rev%:{p.get('reversalPct')}%")
 
-                options_list = chr(10).join(all_options)
+                options_list_str = chr(10).join(all_options_list)
                 
                 prompt = f"""You are an expert options day trader specializing in quick scalping plays. Analyze ALL these options and pick THE SINGLE BEST one for a quick scalp trade (hold for minutes to hours). 
 TARGET: Look for options that can deliver 10-80% returns on a 0.5% - 5% quick stock move. Avoid options that are too far OTM to profit from small moves.
@@ -1275,7 +1276,7 @@ STOCK TECHNICAL DATA (MULTI-TIMEFRAME):
 {stock_section}
 
 OPTIONS TO ANALYZE:
-{options_list}
+{options_list_str}
 
 CRITERIA TO CONSIDER:
 - **STRIKE SELECTION (CRITICAL)**: PREFER strikes that are At-The-Money (ATM) or slightly Out-Of-The-Money (OTM).
@@ -1354,12 +1355,12 @@ RUNNER UPS:
                              pass
 
                 # Get the picked option
-                all_opts = ai_calls + ai_puts
-                if pick_num is not None and 0 <= pick_num < len(all_opts):
-                    recommendation = all_opts[pick_num]
+                all_opts_ai = ai_calls + ai_puts
+                if pick_num is not None and 0 <= pick_num < len(all_opts_ai):
+                    recommendation = all_opts_ai[pick_num]
                 else:
                     # Fallback to highest score if parsing failed
-                    recommendation = max(all_opts, key=lambda x: x.get('scalpScore', 0))
+                    recommendation = max(all_opts_ai, key=lambda x: x.get('scalpScore', 0))
                     reasoning = reasoning or f"Selected based on highest scalp score of {recommendation.get('scalpScore')}."
                 
                 # Get runner-up picks (use AI suggestions if parsed, else fallback to score)
@@ -1367,8 +1368,8 @@ RUNNER UPS:
                 # If we parsed runner ups successfully, try to map them
                 if runner_up_details:
                      for idx, reason in runner_up_details.items():
-                         if 0 <= idx < len(all_opts) and all_opts[idx].get('contractSymbol') != recommendation.get('contractSymbol'):
-                             opt = all_opts[idx]
+                         if 0 <= idx < len(all_opts_ai) and all_opts_ai[idx].get('contractSymbol') != recommendation.get('contractSymbol'):
+                             opt = all_opts_ai[idx]
                              runner_ups.append({
                                 "ticker": opt.get('ticker'),
                                 "type": opt.get('type'),
@@ -1382,7 +1383,7 @@ RUNNER UPS:
                 
                 # Fallback if no runner ups parsed or not enough
                 if len(runner_ups) < 4:
-                     sorted_opts = sorted(all_opts, key=lambda x: x.get('scalpScore', 0), reverse=True)
+                     sorted_opts = sorted(all_opts_ai, key=lambda x: x.get('scalpScore', 0), reverse=True)
                      for opt in sorted_opts[:8]: # Check top 8 to fill gaps
                         if len(runner_ups) >= 4: break
                         if opt.get('contractSymbol') != recommendation.get('contractSymbol') and not any(r['ticker'] == opt.get('ticker') and r['strike'] == opt.get('strike') for r in runner_ups):
@@ -1425,13 +1426,14 @@ RUNNER UPS:
                 }
                     
             except Exception as e:
+                traceback.print_exc()
                 print(f"[AI] Gemini error: {e}")
                 # Fall through to algorithmic fallback
         
         # Fallback: algorithmic selection
         print("[AI] Using algorithmic fallback")
-        all_opts = ai_calls + ai_puts
-        recommendation = max(all_opts, key=lambda x: x.get('scalpScore', 0))
+        all_opts_fallback = ai_calls + ai_puts
+        recommendation = max(all_opts_fallback, key=lambda x: x.get('scalpScore', 0))
         
         return {
             "recommendation": {
@@ -1453,6 +1455,7 @@ RUNNER UPS:
         }
         
     except Exception as e:
+        traceback.print_exc()
         print(f"[AI] Error: {e}")
         return {"error": str(e)}
 
