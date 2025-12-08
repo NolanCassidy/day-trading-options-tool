@@ -1,6 +1,7 @@
 import { useState, useMemo, useEffect, useRef } from 'react'
 import { createChart, AreaSeries } from 'lightweight-charts'
 import StockChart from './StockChart'
+import { API_BASE } from '../config'
 
 /**
  * Proper Black-Scholes option pricing approximation
@@ -65,8 +66,6 @@ function estimateOptionValue(optionType, strike, stockPrice, hoursToExpiry, iv, 
 
 // Convert days to trading hours (6.5 hours per trading day)
 const TRADING_HOURS_PER_DAY = 6.5
-
-const API_BASE = 'http://localhost:8000'
 
 function OptionHistoryChart({ contractSymbol, onBack, embedded = false }) {
     const chartContainerRef = useRef(null)

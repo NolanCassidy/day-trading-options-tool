@@ -54,11 +54,35 @@ Scan 100+ stocks, get AI trade recommendations, analyze with interactive candles
 
 ## Quick Start
 
+### Option 1: Docker (Recommended)
+
+```bash
+# 1. Add your Gemini API key
+cp backend/.env.example backend/.env
+# Edit backend/.env and add your GEMINI_API_KEY
+
+# 2. Build and start containers
+docker-compose up -d --build
+```
+
+**Access the app:** http://localhost:8420
+
+The containers have `restart: always` so they will **auto-start on boot** as long as Docker Desktop is running.
+
+**Useful commands:**
+```bash
+docker-compose logs -f      # View logs
+docker-compose down         # Stop containers
+docker-compose up -d        # Restart without rebuilding
+```
+
+### Option 2: Manual Development Setup
+
 ```bash
 # Backend
 cd backend
 pip install -r requirements.txt
-GEMINI_API_KEY=your_key python main.py
+GEMINI_API_KEY=your_key uvicorn main:app --reload
 
 # Frontend  
 cd frontend
@@ -67,6 +91,16 @@ npm run dev
 ```
 
 Open http://localhost:5173
+
+### Remote Access with Tailscale (Optional)
+
+To access from anywhere using Tailscale Funnel:
+
+```bash
+tailscale funnel --bg 8420
+```
+
+This exposes the app at your Tailscale URL (persists across reboots).
 
 ## Tech Stack
 
