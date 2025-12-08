@@ -2,7 +2,109 @@ import { useEffect, useRef, useState } from 'react'
 import { createChart, CandlestickSeries, LineSeries, HistogramSeries } from 'lightweight-charts'
 import { API_BASE } from '../config'
 
-function StockChart({ ticker, strikes = [], defaultPeriod = '3mo' }) {
+// --- Custom Plugin for Break-Even Background ---
+
+class BreakevenBackgroundRenderer {
+    constructor(data, optionType, chart, series) {
+        this._data = data
+        this._optionType = optionType
+        this._chart = chart
+        this._series = series
+    }
+
+    draw(target) {
+        if (!this._data || this._data.length === 0 || !this._chart || !this._series) return
+
+        target.useBitmapCoordinateSpace(scope => {
+            const ctx = scope.context
+
+            const isCall = this._optionType === 'CALL'
+            const green = 'rgba(0, 210, 106, 0.15)'
+            const red = 'rgba(255, 71, 87, 0.15)'
+
+            const topColor = isCall ? green : red
+            const bottomColor = isCall ? red : green
+
+            const timeScale = this._chart.timeScale()
+
+            // Calculate points using the series/chart APIs
+            const points = this._data.map(d => {
+                const x = timeScale.timeToCoordinate(d.time)
+                const y = this._series.priceToCoordinate(d.value)
+                return { x, y }
+            }).filter(p => p.x !== null && p.y !== null)
+
+            if (points.length < 2) return
+
+            const xStart = points[0].x
+            const xEnd = points[points.length - 1].x
+            const yTop = 0
+            const yBottom = scope.mediaSize.height
+
+            // 1. Draw Top Zone (Profit for Call, Loss for Put)
+            ctx.beginPath()
+            ctx.fillStyle = topColor
+
+            ctx.moveTo(points[0].x, points[0].y)
+            for (let i = 1; i < points.length; i++) {
+                ctx.lineTo(points[i].x, points[i].y)
+            }
+
+            ctx.lineTo(xEnd, yTop)
+            ctx.lineTo(xStart, yTop)
+            ctx.closePath()
+            ctx.fill()
+
+            // 2. Draw Bottom Zone using same path logic but down
+            ctx.beginPath()
+            ctx.fillStyle = bottomColor
+
+            ctx.moveTo(points[0].x, points[0].y)
+            for (let i = 1; i < points.length; i++) {
+                ctx.lineTo(points[i].x, points[i].y)
+            }
+
+            ctx.lineTo(xEnd, yBottom)
+            ctx.lineTo(xStart, yBottom)
+            ctx.closePath()
+            ctx.fill()
+        })
+    }
+}
+
+class BreakevenBackground {
+    constructor(data, optionType) {
+        this._data = data
+        this._optionType = optionType
+        this._chart = null
+        this._series = null
+    }
+
+    attached({ chart, series, requestUpdate }) {
+        this._chart = chart
+        this._series = series
+        this._requestUpdate = requestUpdate
+    }
+
+    detached() {
+        this._chart = null
+        this._series = null
+    }
+
+    update(data, optionType) {
+        this._data = data
+        this._optionType = optionType
+        if (this._requestUpdate) this._requestUpdate()
+    }
+
+    paneViews() {
+        return [{
+            renderer: () => new BreakevenBackgroundRenderer(this._data, this._optionType, this._chart, this._series)
+        }]
+    }
+}
+
+function StockChart({ ticker, strikes = [], defaultPeriod = '3mo', roiCurves = {}, optionType = 'CALL' }) {
     const chartContainerRef = useRef(null)
     const chartRef = useRef(null)
     const [period, setPeriod] = useState(defaultPeriod)
@@ -170,7 +272,8 @@ function StockChart({ ticker, strikes = [], defaultPeriod = '3mo' }) {
                 time: c.time,
                 value: c.volume || 0,
                 color: c.close >= c.open ? 'rgba(0, 210, 106, 0.3)' : 'rgba(255, 71, 87, 0.3)',
-            })))
+            }))
+            )
 
             chart.timeScale().fitContent()
 
@@ -181,6 +284,52 @@ function StockChart({ ticker, strikes = [], defaultPeriod = '3mo' }) {
                 }
             }
             window.addEventListener('resize', handleResize)
+
+            // Add ROI Lines
+            if (roiCurves) {
+                // 1. Zero (Break-even) - Main Line with Background
+                if (roiCurves.zero && roiCurves.zero.length > 0) {
+                    const beSeries = chart.addSeries(LineSeries, {
+                        color: '#ffd700', // Gold
+                        lineWidth: 2,
+                        lineStyle: 2, // Dashed
+                        lastValueVisible: false,
+                        priceLineVisible: false,
+                        crosshairMarkerVisible: false,
+                        title: 'Break Even'
+                    })
+                    beSeries.setData(roiCurves.zero)
+
+                    // Attach background plugin
+                    const bgPlugin = new BreakevenBackground(roiCurves.zero, optionType)
+                    beSeries.attachPrimitive(bgPlugin)
+                }
+
+                // Helper to add ROI lines
+                const addRoiLine = (data, color, title) => {
+                    if (data && data.length > 0) {
+                        const s = chart.addSeries(LineSeries, {
+                            color: color,
+                            lineWidth: 1,
+                            lineStyle: 3, // Dotted
+                            lastValueVisible: false,
+                            priceLineVisible: false,
+                            crosshairMarkerVisible: false,
+                            title: title
+                        })
+                        s.setData(data)
+                    }
+                }
+
+                // Profit Lines (Green tint)
+                addRoiLine(roiCurves.p25, 'rgba(0, 210, 106, 0.6)', '+25%')
+                addRoiLine(roiCurves.p50, 'rgba(0, 210, 106, 0.8)', '+50%')
+                addRoiLine(roiCurves.p100, '#00d26a', '+100%')
+
+                // Loss Lines (Red tint)
+                addRoiLine(roiCurves.l25, 'rgba(255, 71, 87, 0.6)', '-25%')
+                addRoiLine(roiCurves.l50, 'rgba(255, 71, 87, 0.8)', '-50%')
+            }
 
             return () => {
                 window.removeEventListener('resize', handleResize)
@@ -193,7 +342,7 @@ function StockChart({ ticker, strikes = [], defaultPeriod = '3mo' }) {
             console.error('Error creating chart:', e)
             setError('Error rendering chart: ' + e.message)
         }
-    }, [data, showEmas, strikes])
+    }, [data, showEmas, strikes, roiCurves, optionType])
 
     if (!ticker) return null
 

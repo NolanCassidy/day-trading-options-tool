@@ -328,7 +328,7 @@ const EditableAxisLabel = ({ value, onSave }) => {
 }
 
 function ProfitEstimator({ option, currentPrice, onClose, onNavigate }) {
-    const totalHours = (option.daysToExpiry || 1) * TRADING_HOURS_PER_DAY
+    const totalHours = ((option.daysToExpiry || 0) + 1) * TRADING_HOURS_PER_DAY
 
     // Calculate initial time: closest future 30 min interval
     const getInitialHoursToSell = () => {
@@ -673,6 +673,83 @@ function ProfitEstimator({ option, currentPrice, onClose, onNavigate }) {
         }
     }
 
+    // --- Break-Even Curve Calculation ---
+
+    const findBreakevenPriceForTime = (targetOptionValue, timeRemaining, volatility, totalTime, isCall, strike) => {
+        // Binary search for StockPrice where EstimateOptionValue(...) ~= targetOptionValue
+        let low = strike * 0.5
+        let high = strike * 1.5
+        let iterations = 0
+
+        // Expand search range if needed
+        while (estimateOptionValue(isCall ? 'CALL' : 'PUT', strike, low, timeRemaining, volatility, totalTime) > targetOptionValue && iterations < 10) {
+            low *= 0.8
+            iterations++
+        }
+        iterations = 0;
+        while (estimateOptionValue(isCall ? 'CALL' : 'PUT', strike, high, timeRemaining, volatility, totalTime) < targetOptionValue && iterations < 10) {
+            high *= 1.2
+            iterations++
+        }
+
+        // Binary search
+        for (let i = 0; i < 20; i++) {
+            const mid = (low + high) / 2
+            const val = estimateOptionValue(isCall ? 'CALL' : 'PUT', strike, mid, timeRemaining, volatility, totalTime)
+
+            if (Math.abs(val - targetOptionValue) < 0.01) return mid
+
+            if (isCall) {
+                if (val < targetOptionValue) low = mid
+                else high = mid
+            } else {
+                if (val < targetOptionValue) high = mid // Puts increase as stock drops
+                else low = mid
+            }
+        }
+        return (low + high) / 2
+    }
+
+    const roiCurves = useMemo(() => {
+        if (!option || !entryPrice) return {}
+
+        const now = new Date()
+        const isCall = optionType === 'CALL'
+
+        const generateCurve = (targetValue) => {
+            const points = []
+            const hoursLeft = Math.max(0, totalHours - getInitialHoursToSell())
+            if (hoursLeft <= 0) return []
+
+            const numPoints = 20
+            const stepHours = hoursLeft / numPoints
+
+            let currentUnix = Math.floor(now.getTime() / 1000)
+
+            for (let i = 0; i <= numPoints; i++) {
+                const tRemaining = hoursLeft - (i * stepHours)
+                const price = findBreakevenPriceForTime(targetValue, Math.max(0.01, tRemaining), iv, totalHours, isCall, strike)
+
+                const realSecondsToAdd = (stepHours / 6.5) * 24 * 3600
+
+                points.push({
+                    time: currentUnix + Math.round(i * realSecondsToAdd),
+                    value: price
+                })
+            }
+            return points
+        }
+
+        return {
+            zero: generateCurve(entryPrice),
+            p25: generateCurve(entryPrice * 1.25),
+            p50: generateCurve(entryPrice * 1.50),
+            p100: generateCurve(entryPrice * 2.00),
+            l25: generateCurve(entryPrice * 0.75),
+            l50: generateCurve(entryPrice * 0.50),
+        }
+    }, [option, entryPrice, totalHours, iv, optionType, strike])
+
     return (
         <div className="estimator-page">
             <div className="estimator-header">
@@ -908,7 +985,13 @@ function ProfitEstimator({ option, currentPrice, onClose, onNavigate }) {
                     <div className="history-section">
                         <h3>{option.ticker} stock chart</h3>
                         <div className="embedded-stock-chart">
-                            <StockChart ticker={option.ticker} strikes={[option.strike]} defaultPeriod="1m" />
+                            <StockChart
+                                ticker={option.ticker}
+                                strikes={[option.strike]}
+                                defaultPeriod="1m"
+                                roiCurves={roiCurves}
+                                optionType={optionType}
+                            />
                         </div>
                     </div>
                 )}
