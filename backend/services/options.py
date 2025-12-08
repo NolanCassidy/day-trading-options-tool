@@ -1232,11 +1232,11 @@ def get_ai_recommendation(options_data: dict, market_context: dict = None) -> di
         
         if GEMINI_AVAILABLE:
             try:
-                print(f"[AI] Calling Gemini with {len(calls)} calls and {len(puts)} puts...")
+                print(f"[AI] Calling Gemini with {len(ai_calls)} calls and {len(ai_puts)} puts...")
                 model = genai.GenerativeModel('gemini-2.5-flash')
                 
                 # Get unique tickers and fetch their stock data
-                all_tickers = set([c.get('ticker') for c in calls] + [p.get('ticker') for p in puts])
+                all_tickers = set([c.get('ticker') for c in ai_calls] + [p.get('ticker') for p in ai_puts])
                 stock_data = {}
                 for ticker in list(all_tickers)[:5]:  # Limit to 5 stocks for speed with multi-tf fetch
                     try:
@@ -1354,7 +1354,7 @@ RUNNER UPS:
                              pass
 
                 # Get the picked option
-                all_opts = calls + puts
+                all_opts = ai_calls + ai_puts
                 if pick_num is not None and 0 <= pick_num < len(all_opts):
                     recommendation = all_opts[pick_num]
                 else:
@@ -1430,7 +1430,7 @@ RUNNER UPS:
         
         # Fallback: algorithmic selection
         print("[AI] Using algorithmic fallback")
-        all_opts = calls + puts
+        all_opts = ai_calls + ai_puts
         recommendation = max(all_opts, key=lambda x: x.get('scalpScore', 0))
         
         return {
