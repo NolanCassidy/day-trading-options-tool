@@ -287,6 +287,184 @@ function OptionHistoryChart({ contractSymbol, onBack, embedded = false }) {
     )
 }
 
+// Options Calculator Matrix - shows P/L percentage at various stock prices and dates
+function OptionsMatrix({ option, currentPrice, entryPrice, iv, optionType, strike, totalHours, expiryDate }) {
+    const [priceRange, setPriceRange] = useState({ min: null, max: null })
+    const [numRows, setNumRows] = useState(20)
+    const [numCols, setNumCols] = useState(12)
+
+    // Initialize price range based on current price
+    useEffect(() => {
+        if (currentPrice && priceRange.min === null) {
+            const range = currentPrice * 0.10 // ±10% range
+            setPriceRange({
+                min: Math.floor(currentPrice - range),
+                max: Math.ceil(currentPrice + range)
+            })
+        }
+    }, [currentPrice])
+
+    // Generate matrix data
+    const matrixData = useMemo(() => {
+        if (!option || !entryPrice || !currentPrice || !priceRange.min || !priceRange.max) return null
+
+        const rows = []
+        const priceStep = (priceRange.max - priceRange.min) / (numRows - 1)
+
+        // Generate column dates (from now to expiry)
+        const now = new Date()
+        const columnDates = []
+        const totalMs = expiryDate.getTime() - now.getTime()
+
+        for (let i = 0; i < numCols; i++) {
+            const ms = now.getTime() + (totalMs * i / (numCols - 1))
+            columnDates.push(new Date(ms))
+        }
+
+        // Calculate hours remaining for each column
+        const columnHours = columnDates.map((date, idx) => {
+            if (idx === numCols - 1) return 0.01 // Expiry
+            const pct = 1 - (idx / (numCols - 1))
+            return Math.max(0.01, totalHours * pct)
+        })
+
+        // CALIBRATION: Calculate what BS says at CURRENT price with CURRENT time remaining
+        const bsAtCurrentPrice = estimateOptionValue(
+            optionType, strike, currentPrice, totalHours, iv, totalHours
+        )
+
+        // Generate rows (from high price to low - descending)
+        for (let r = numRows - 1; r >= 0; r--) {
+            const stockPrice = priceRange.min + (priceStep * r)
+            const row = {
+                stockPrice,
+                cells: []
+            }
+
+            // Generate cells for each date column
+            for (let c = 0; c < numCols; c++) {
+                const hoursRemaining = columnHours[c]
+                const timeProgress = 1 - (hoursRemaining / Math.max(1, totalHours))
+
+                // Apply calibration (more at now, less at expiry)
+                const calibrationFactor = bsAtCurrentPrice > 0.01
+                    ? (entryPrice / bsAtCurrentPrice) * (1 - timeProgress) + 1 * timeProgress
+                    : 1
+
+                const rawValue = estimateOptionValue(
+                    optionType, strike, stockPrice, hoursRemaining, iv, totalHours
+                )
+                const estimatedValue = rawValue * calibrationFactor
+                const profit = (estimatedValue - entryPrice) * 100
+                const pctOfRisk = (profit / (entryPrice * 100)) * 100
+
+                row.cells.push({
+                    profit,
+                    pctOfRisk,
+                    date: columnDates[c]
+                })
+            }
+            rows.push(row)
+        }
+
+        return { rows, columnDates }
+    }, [option, currentPrice, entryPrice, priceRange, numRows, numCols, totalHours, iv, optionType, strike, expiryDate])
+
+    // Get color based on percentage
+    const getCellColor = (pct) => {
+        if (pct >= 100) return 'rgba(0, 180, 80, 0.95)'
+        if (pct >= 50) return 'rgba(0, 160, 70, 0.85)'
+        if (pct >= 25) return 'rgba(0, 140, 60, 0.75)'
+        if (pct >= 10) return 'rgba(0, 120, 50, 0.65)'
+        if (pct >= 0) return 'rgba(0, 100, 40, 0.45)'
+        if (pct >= -25) return 'rgba(200, 60, 60, 0.5)'
+        if (pct >= -50) return 'rgba(200, 50, 50, 0.65)'
+        if (pct >= -75) return 'rgba(180, 40, 40, 0.8)'
+        return 'rgba(160, 30, 30, 0.9)'
+    }
+
+    // Format date for column header
+    const formatDateHeader = (date, idx, total) => {
+        if (idx === 0) return 'Now'
+        if (idx === total - 1) return 'Exp'
+
+        const month = date.getMonth() + 1
+        const day = date.getDate()
+        return `${month}/${day}`
+    }
+
+    if (!matrixData) {
+        return <div className="options-matrix-loading">Loading matrix...</div>
+    }
+
+    return (
+        <div className="options-matrix">
+            <div className="matrix-controls">
+                <div className="matrix-range-control">
+                    <label>Price Range:</label>
+                    <input
+                        type="number"
+                        value={priceRange.min || ''}
+                        onChange={e => setPriceRange(prev => ({ ...prev, min: Number(e.target.value) }))}
+                        className="matrix-range-input"
+                    />
+                    <span>to</span>
+                    <input
+                        type="number"
+                        value={priceRange.max || ''}
+                        onChange={e => setPriceRange(prev => ({ ...prev, max: Number(e.target.value) }))}
+                        className="matrix-range-input"
+                    />
+                </div>
+            </div>
+            <div className="matrix-scroll-container">
+                <table className="matrix-table">
+                    <thead>
+                        <tr>
+                            <th className="matrix-corner">Price</th>
+                            {matrixData.columnDates.map((date, idx) => (
+                                <th key={idx} className="matrix-date-header">
+                                    {formatDateHeader(date, idx, matrixData.columnDates.length)}
+                                </th>
+                            ))}
+                            <th className="matrix-corner">+/-</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {matrixData.rows.map((row, rIdx) => {
+                            const isCurrentRow = Math.abs(row.stockPrice - currentPrice) <
+                                ((priceRange.max - priceRange.min) / numRows / 2)
+                            return (
+                                <tr key={rIdx} className={isCurrentRow ? 'matrix-current-row' : ''}>
+                                    <td className="matrix-price-label">
+                                        ${row.stockPrice.toFixed(0)}
+                                    </td>
+                                    {row.cells.map((cell, cIdx) => (
+                                        <td
+                                            key={cIdx}
+                                            className="matrix-cell"
+                                            style={{ backgroundColor: getCellColor(cell.pctOfRisk) }}
+                                            title={`$${row.stockPrice.toFixed(1)} @ ${cell.date.toLocaleDateString()}: ${cell.pctOfRisk >= 0 ? '+' : ''}${cell.pctOfRisk.toFixed(0)}%`}
+                                        >
+                                            <span className={cell.pctOfRisk >= 0 ? 'profit' : 'loss'}>
+                                                {cell.pctOfRisk >= 0 ? '+' : ''}{cell.pctOfRisk.toFixed(0)}%
+                                            </span>
+                                        </td>
+                                    ))}
+                                    <td className="matrix-pnl-summary">
+                                        {row.cells[row.cells.length - 1].pctOfRisk >= 0 ? '+' : ''}
+                                        {row.cells[row.cells.length - 1].pctOfRisk.toFixed(0)}%
+                                    </td>
+                                </tr>
+                            )
+                        })}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    )
+}
+
 // Helper for clickable axis labels
 const EditableAxisLabel = ({ value, onSave }) => {
     const [isEditing, setIsEditing] = useState(false)
@@ -751,36 +929,53 @@ function ProfitEstimator({ option, currentPrice, onClose, onNavigate }) {
 
     // --- Break-Even Curve Calculation ---
 
-    const findBreakevenPriceForTime = (targetOptionValue, timeRemaining, volatility, totalTime, isCall, strike) => {
+    const findBreakevenPriceForTime = (targetOptionValue, timeRemaining, volatility, totalTime, isCall, strikePrice) => {
         // Binary search for StockPrice where EstimateOptionValue(...) ~= targetOptionValue
-        let low = strike * 0.5
-        let high = strike * 1.5
+        // For CALLs: higher stock price = higher option value
+        // For PUTs: lower stock price = higher option value
+
+        let low = strikePrice * 0.3
+        let high = strikePrice * 2.0
         let iterations = 0
 
+        const getVal = (price) => estimateOptionValue(isCall ? 'CALL' : 'PUT', strikePrice, price, timeRemaining, volatility, totalTime)
+
         // Expand search range if needed
-        while (estimateOptionValue(isCall ? 'CALL' : 'PUT', strike, low, timeRemaining, volatility, totalTime) > targetOptionValue && iterations < 10) {
-            low *= 0.8
+        const lowVal = getVal(low)
+        const highVal = getVal(high)
+
+        while (getVal(low) > targetOptionValue && iterations < 15) {
+            low *= 0.7
             iterations++
         }
-        iterations = 0;
-        while (estimateOptionValue(isCall ? 'CALL' : 'PUT', strike, high, timeRemaining, volatility, totalTime) < targetOptionValue && iterations < 10) {
-            high *= 1.2
+        iterations = 0
+        while (getVal(high) < targetOptionValue && iterations < 15) {
+            high *= 1.5
             iterations++
         }
 
-        // Binary search
-        for (let i = 0; i < 20; i++) {
+        // Binary search - for CALLs, option value increases with stock price
+        // So if current value is less than target, we need to go higher
+        for (let i = 0; i < 30; i++) {
             const mid = (low + high) / 2
-            const val = estimateOptionValue(isCall ? 'CALL' : 'PUT', strike, mid, timeRemaining, volatility, totalTime)
+            const val = getVal(mid)
 
-            if (Math.abs(val - targetOptionValue) < 0.01) return mid
+            if (Math.abs(val - targetOptionValue) < 0.005) return mid
 
             if (isCall) {
-                if (val < targetOptionValue) low = mid
-                else high = mid
+                // CALL: value increases as stock increases
+                if (val < targetOptionValue) {
+                    low = mid  // Need higher price for higher value
+                } else {
+                    high = mid // Need lower price for lower value
+                }
             } else {
-                if (val < targetOptionValue) high = mid // Puts increase as stock drops
-                else low = mid
+                // PUT: value increases as stock decreases
+                if (val < targetOptionValue) {
+                    high = mid // Need lower price for higher value
+                } else {
+                    low = mid  // Need higher price for lower value
+                }
             }
         }
         return (low + high) / 2
@@ -1109,6 +1304,20 @@ function ProfitEstimator({ option, currentPrice, onClose, onNavigate }) {
                         </div>
                     </div>
                 )}
+                {/* Options Calculator Matrix */}
+                <div className="history-section">
+                    <h3>profit/loss matrix</h3>
+                    <OptionsMatrix
+                        option={option}
+                        currentPrice={liveCurrentPrice}
+                        entryPrice={entryPrice}
+                        iv={iv}
+                        optionType={optionType}
+                        strike={strike}
+                        totalHours={totalHours}
+                        expiryDate={expiryDate}
+                    />
+                </div>
             </div>
         </div>
     )

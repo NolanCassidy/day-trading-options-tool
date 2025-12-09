@@ -2534,3 +2534,142 @@ tr.itm:hover {
   filter: invert(0.8);
   cursor: pointer;
 }
+
+/* ===== OPTIONS MATRIX ===== */
+.options-matrix {
+  margin-top: 12px;
+}
+
+.options-matrix-loading {
+  padding: 40px;
+  text-align: center;
+  color: var(--text-muted);
+}
+
+.matrix-controls {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 8px 12px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  margin-bottom: 8px;
+}
+
+.matrix-range-control {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+
+.matrix-range-control label {
+  font-weight: 500;
+}
+
+.matrix-range-input {
+  width: 70px;
+  background: var(--bg-primary);
+  border: 1px solid var(--border);
+  color: var(--text-primary);
+  padding: 4px 8px;
+  font-size: 11px;
+  border-radius: var(--radius);
+  font-family: inherit;
+}
+
+.matrix-range-input:focus {
+  outline: none;
+  border-color: var(--blue);
+}
+
+.matrix-scroll-container {
+  overflow-x: auto;
+  max-width: 100%;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+
+.matrix-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+  min-width: 600px;
+}
+
+.matrix-table th,
+.matrix-table td {
+  padding: 4px 6px;
+  text-align: center;
+  border: 1px solid var(--border);
+}
+
+.matrix-corner {
+  background: var(--bg-secondary);
+  color: var(--text-muted);
+  font-weight: 600;
+  font-size: 9px;
+  text-transform: uppercase;
+  position: sticky;
+  left: 0;
+  z-index: 2;
+}
+
+.matrix-date-header {
+  background: var(--bg-secondary);
+  color: var(--text-secondary);
+  font-weight: 500;
+  font-size: 9px;
+  white-space: nowrap;
+}
+
+.matrix-price-label {
+  background: var(--bg-card);
+  color: var(--text-primary);
+  font-weight: 500;
+  text-align: right !important;
+  padding-right: 8px !important;
+  white-space: nowrap;
+  position: sticky;
+  left: 0;
+  z-index: 1;
+}
+
+.matrix-cell {
+  min-width: 45px;
+  transition: background-color 0.1s;
+}
+
+.matrix-cell span {
+  font-weight: 500;
+}
+
+.matrix-cell span.profit {
+  color: #fff;
+}
+
+.matrix-cell span.loss {
+  color: #fff;
+}
+
+.matrix-pnl-summary {
+  background: var(--bg-card);
+  color: var(--text-secondary);
+  font-weight: 600;
+  font-size: 9px;
+  border-left: 2px solid var(--border-light) !important;
+}
+
+.matrix-current-row td {
+  border-top: 2px solid var(--yellow) !important;
+  border-bottom: 2px solid var(--yellow) !important;
+}
+
+.matrix-current-row .matrix-price-label {
+  background: rgba(255, 193, 7, 0.2);
+  color: var(--yellow);
+  font-weight: 700;
+}
