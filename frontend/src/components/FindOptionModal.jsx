@@ -10,6 +10,7 @@ const FindOptionModal = ({ ticker, currentPrice, onClose, onSelectOption }) => {
     const [loading, setLoading] = useState(false);
     const [results, setResults] = useState(null);
     const [error, setError] = useState('');
+    const [warning, setWarning] = useState('');
 
     // Set default target date to tomorrow
     useEffect(() => {
@@ -31,6 +32,7 @@ const FindOptionModal = ({ ticker, currentPrice, onClose, onSelectOption }) => {
 
         setLoading(true);
         setError('');
+        setWarning('');
         setResults(null);
 
         try {
@@ -49,6 +51,9 @@ const FindOptionModal = ({ ticker, currentPrice, onClose, onSelectOption }) => {
             if (res.ok) {
                 const data = await res.json();
                 setResults(data.options);
+                if (data.warning) {
+                    setWarning(data.warning);
+                }
                 if (data.options.length === 0) {
                     setError(data.message || 'No matching options found. Try adjusting criteria.');
                 }
@@ -128,6 +133,7 @@ const FindOptionModal = ({ ticker, currentPrice, onClose, onSelectOption }) => {
                         {loading ? 'Analyzing Options...' : 'Find Best Options'}
                     </button>
 
+                    {warning && <div className="warning-msg">{warning}</div>}
                     {error && <div className="error-msg">{error}</div>}
 
                     {results && (

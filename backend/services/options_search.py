@@ -151,18 +151,33 @@ def find_best_options(ticker: str, target_price: float, target_date_str: str,
                 print(f"Error processing {expiry}: {e}")
                 continue
 
+        warning = None
+
         # Soft Filter for Max Option Price
         if max_option_price is not None and max_option_price > 0:
-            filtered_results = [r for r in results if r['ask'] <= max_option_price]
-            if filtered_results:
-                results = filtered_results
+            try:
+                max_option_price = float(max_option_price)
+                # Debug logging
+                # print(f"DEBUG: Max Price: {max_option_price} (Type: {type(max_option_price)})")
+                # print(f"DEBUG: Sample Ask: {results[0]['ask']} (Type: {type(results[0]['ask'])})")
+                
+                filtered_results = [r for r in results if float(r['ask']) <= max_option_price]
+                
+                # print(f"DEBUG: Filter matched {len(filtered_results)} / {len(results)} options")
+                
+                if filtered_results:
+                    results = filtered_results
+                else:
+                    warning = f"No options found under ${max_option_price:.2f}. Showing all results."
+            except Exception as e:
+                print(f"Error in max price filter: {e}")
             # If empty, we keep original results (fallback)
 
         # Sort by Profit %
         results.sort(key=lambda x: x['profitPct'], reverse=True)
         
         # Return top 20
-        return {"options": results[:20]}
+        return {"options": results[:20], "warning": warning}
 
 
     except Exception as e:

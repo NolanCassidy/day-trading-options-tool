@@ -234,3 +234,13 @@
     margin-left: 5px;
     font-weight: normal;
 }
+
+.warning-msg {
+    color: #ffb74d;
+    margin-top: 10px;
+    text-align: center;
+    background: rgba(255, 183, 77, 0.1);
+    padding: 8px;
+    border-radius: 4px;
+    border: 1px solid rgba(255, 183, 77, 0.3);
+}
