@@ -978,6 +978,31 @@ function App() {
           </div>
         </div>
       )}
+      {/* Find Option Modal */}
+      {showFindOption && (
+        <FindOptionModal
+          ticker={searchTicker}
+          currentPrice={quote?.price}
+          onClose={() => setShowFindOption(false)}
+          onSelectOption={(opt) => {
+            setShowFindOption(false)
+            const loadSelected = async () => {
+              setLoading(true)
+              try {
+                updateURL('option', searchTicker, opt.contractSymbol)
+                await fetchData(searchTicker, opt.expiry)
+                handleOptionClick(opt, searchTicker, opt.expiry, opt.daysToExpiry, opt.type)
+              } catch (e) {
+                console.error(e)
+              } finally {
+                setLoading(false)
+              }
+            }
+            loadSelected()
+          }}
+        />
+      )}
+
       {/* Profit Estimator Modal */}
       {selectedOption && (
         <ProfitEstimator

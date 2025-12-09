@@ -51,7 +51,7 @@ const FindOptionModal = ({ ticker, currentPrice, onClose, onSelectOption }) => {
                 const data = await res.json();
                 setResults(data.options);
                 if (data.options.length === 0) {
-                    setError('No matching options found. Try adjusting criteria.');
+                    setError(data.message || 'No matching options found. Try adjusting criteria.');
                 }
             } else {
                 const err = await res.json();

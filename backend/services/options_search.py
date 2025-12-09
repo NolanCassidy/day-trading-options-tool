@@ -8,8 +8,8 @@ from .options import get_stock_quote, calculate_option_price, get_robust_stock_d
 
 # Constants
 RISK_FREE_RATE = 0.05
-MIN_VOLUME = 10  # Minimum volume to consider
-MIN_OI = 10      # Minimum Open Interest to consider
+MIN_VOLUME = 1  # Minimum volume to consider
+MIN_OI = 1      # Minimum Open Interest to consider
 
 def find_best_options(ticker: str, target_price: float, stop_loss: float, 
                       target_date_str: str, option_type: str) -> dict:
@@ -67,10 +67,12 @@ def find_best_options(ticker: str, target_price: float, stop_loss: float,
                     break
         
         if not valid_expirations:
-             # If no expiry after target date, maybe target is too far?
-             # Or maybe just use the last available.
-             # For now return empty.
-             return {"options": [], "message": "No expirations found after target date"}
+             # Just return the last available expiry if none are after target date?
+             # No, strict requirement for target date logic.
+             return {
+                 "options": [], 
+                 "message": f"No expirations found on or after {target_date_str}. Try an earlier date."
+             }
 
         results = []
 
@@ -83,7 +85,6 @@ def find_best_options(ticker: str, target_price: float, stop_loss: float,
                 time_to_expiry_now = max(days_to_expiry_total, 0.5) / 365.0
                 
                 # Calculate time remaining at Target Date (T - t_target)
-                # This is what we use to value the option AT the target date.
                 time_remaining_at_target = max(time_to_expiry_now - time_to_target, 0.001)
 
                 # Fetch chain
@@ -97,17 +98,14 @@ def find_best_options(ticker: str, target_price: float, stop_loss: float,
                 ]
                 
                 # Filter strikes:
-                # For CALLs: Strikes below Target Price usually behave better, or slightly OTM.
-                # Don't check DEEP OTM calls (Strike > Target * 1.2) as they might be lottery tickets.
-                # For PUTs: Strikes above Target Price (since target is lower).
-                
                 # Broad filter to reduce computation
                 if option_type == 'CALL':
-                    opts = opts[opts['strike'] < target_price * 1.5]
-                    opts = opts[opts['strike'] > current_stock_price * 0.8]
+                    # Allow anything from 50% to 200% of target/current
+                    opts = opts[opts['strike'] < target_price * 2.0]
+                    opts = opts[opts['strike'] > current_stock_price * 0.5]
                 else:
                     opts = opts[opts['strike'] > target_price * 0.5]
-                    opts = opts[opts['strike'] < current_stock_price * 1.2]
+                    opts = opts[opts['strike'] < current_stock_price * 2.0]
 
                 for _, row in opts.iterrows():
                     strike = float(row['strike'])
@@ -173,20 +171,19 @@ def find_best_options(ticker: str, target_price: float, stop_loss: float,
 
                     rr_ratio = profit / loss
 
-                    # Filter Logic
-                    if profit > 0: # Only want positive trades
-                         results.append({
-                             "expiry": expiry,
-                             "daysToExpiry": days_to_expiry_total,
-                             "strike": strike,
-                             "contractSymbol": row['contractSymbol'],
-                             "ask": entry_cost,
-                             "projectedReward": profit,
-                             "projectedRisk": -loss, # Display as negative
-                             "riskRewardRatio": rr_ratio,
-                             "type": option_type,
-                             "iv": iv
-                         })
+                    # Always append (user wants result no matter what)
+                    results.append({
+                         "expiry": expiry,
+                         "daysToExpiry": days_to_expiry_total,
+                         "strike": strike,
+                         "contractSymbol": row['contractSymbol'],
+                         "ask": entry_cost,
+                         "projectedReward": profit,
+                         "projectedRisk": -loss, # Display as negative
+                         "riskRewardRatio": rr_ratio,
+                         "type": option_type,
+                         "iv": iv
+                    })
 
             except Exception as e:
                 print(f"Error processing {expiry}: {e}")
