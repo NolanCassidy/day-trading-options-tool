@@ -149,6 +149,7 @@ class FindOptionsRequest(BaseModel):
     targetPrice: float
     stopLoss: float | None = None
     targetDate: str
+    maxOptionPrice: float | None = None
 
 
 @app.post("/api/find-options")
@@ -159,7 +160,8 @@ async def find_options(request: FindOptionsRequest):
             request.ticker,
             request.targetPrice,
             request.targetDate,
-            request.optionType
+            request.optionType,
+            max_option_price=request.maxOptionPrice
         )
         if "error" in data:
             raise HTTPException(status_code=400, detail=data["error"])
