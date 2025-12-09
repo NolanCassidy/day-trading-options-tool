@@ -12,20 +12,18 @@ MIN_VOLUME = 1  # Minimum volume to consider
 MIN_OI = 1      # Minimum Open Interest to consider
 
 def find_best_options(ticker: str, target_price: float, target_date_str: str, 
-                      option_type: str, stop_loss: float = None) -> dict:
+                      option_type: str) -> dict:
     """
-    Find best options based on Risk:Reward ratio given a price target and date.
-    If stop_loss is None, finds options with highest projected profit (Maximize Gain).
+    Find best options based on projected profit at target date/price.
     
     Args:
         ticker: Stock symbol
         target_price: Expected stock price at target date
         target_date_str: Date by which target is expected (YYYY-MM-DD)
         option_type: 'CALL' or 'PUT'
-        stop_loss: Price at which to exit if thesis is wrong (Optional)
         
     Returns:
-        Dict with list of options sorted by R:R or Profit
+        Dict with list of options sorted by Projected Profit %
     """
     try:
         # 1. Validate inputs
@@ -135,22 +133,6 @@ def find_best_options(ticker: str, target_price: float, target_date_str: str,
                     profit = projected_reward_price - entry_cost
                     profit_pct = (profit / entry_cost) * 100 if entry_cost > 0 else 0
 
-                    loss = 0
-                    rr_ratio = 0
-                    
-                    # 2. Risk Scenario (only if Stop Loss provided)
-                    if stop_loss is not None and stop_loss > 0:
-                        projected_risk_price = calculate_option_price(
-                            option_type.lower(), 
-                            stop_loss, 
-                            strike, 
-                            time_remaining_at_target, 
-                            iv
-                        )
-                        loss = entry_cost - projected_risk_price 
-                        if loss <= 0.01: loss = 0.01 # Floor
-                        rr_ratio = profit / loss
-
                     # Always append
                     results.append({
                          "expiry": expiry,
@@ -159,8 +141,6 @@ def find_best_options(ticker: str, target_price: float, target_date_str: str,
                          "contractSymbol": row['contractSymbol'],
                          "ask": entry_cost,
                          "projectedReward": profit,
-                         "projectedRisk": -loss if stop_loss else 0,
-                         "riskRewardRatio": rr_ratio,
                          "type": option_type,
                          "iv": iv,
                          "profitPct": profit_pct
@@ -170,20 +150,8 @@ def find_best_options(ticker: str, target_price: float, target_date_str: str,
                 print(f"Error processing {expiry}: {e}")
                 continue
 
-        # Sort
-        if stop_loss is not None and stop_loss > 0:
-            # Sort by R:R descending
-            results.sort(key=lambda x: x['riskRewardRatio'], reverse=True)
-        else:
-            # Sort by Profit (absolute or pct? User said "largest gain", could mean %)
-            # "Largest gain" usually implies absolute dollar gain if they have a fixed investment, 
-            # OR % gain if investment varies. 
-            # Usually traders care about % ROI.
-            # Let's sort by Projected Reward (Absolute $) for now as it matches "Reward" column.
-            # But wait, a $1000 option making $100 vs $10 option making $5 (50%).
-            # User probably wants % gain.
-            # Added `profitPct` to dict. I'll sort by that for "max gain" mode.
-            results.sort(key=lambda x: x['profitPct'], reverse=True)
+        # Sort by Profit %
+        results.sort(key=lambda x: x['profitPct'], reverse=True)
         
         # Return top 20
         return {"options": results[:20]}

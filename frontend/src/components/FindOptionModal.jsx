@@ -5,7 +5,6 @@ import './FindOptionModal.css'; // We'll create this next
 const FindOptionModal = ({ ticker, currentPrice, onClose, onSelectOption }) => {
     const [optionType, setOptionType] = useState('CALL');
     const [targetPrice, setTargetPrice] = useState('');
-    const [stopLoss, setStopLoss] = useState('');
     const [targetDate, setTargetDate] = useState('');
     const [loading, setLoading] = useState(false);
     const [results, setResults] = useState(null);
@@ -20,7 +19,6 @@ const FindOptionModal = ({ ticker, currentPrice, onClose, onSelectOption }) => {
         // Default targets based on current price (just suggestions)
         if (currentPrice) {
             setTargetPrice((currentPrice * 1.05).toFixed(2));
-            setStopLoss((currentPrice * 0.98).toFixed(2));
         }
     }, [currentPrice]);
 
@@ -34,8 +32,6 @@ const FindOptionModal = ({ ticker, currentPrice, onClose, onSelectOption }) => {
         setError('');
         setResults(null);
 
-        const slValue = stopLoss ? parseFloat(stopLoss) : null;
-
         try {
             const res = await fetch(`${API_BASE}/api/find-options`, {
                 method: 'POST',
@@ -44,7 +40,6 @@ const FindOptionModal = ({ ticker, currentPrice, onClose, onSelectOption }) => {
                     ticker,
                     optionType,
                     targetPrice: parseFloat(targetPrice),
-                    stopLoss: slValue,
                     targetDate
                 })
             });
@@ -66,8 +61,6 @@ const FindOptionModal = ({ ticker, currentPrice, onClose, onSelectOption }) => {
             setLoading(false);
         }
     };
-
-    const showRiskInfo = !!stopLoss;
 
     return (
         <div className="modal-overlay">
@@ -108,17 +101,6 @@ const FindOptionModal = ({ ticker, currentPrice, onClose, onSelectOption }) => {
                         </div>
 
                         <div className="form-group">
-                            <label>Stop Loss ($) <span className="optional-label">(Optional)</span></label>
-                            <input
-                                type="number"
-                                step="0.01"
-                                placeholder="Optional"
-                                value={stopLoss}
-                                onChange={e => setStopLoss(e.target.value)}
-                            />
-                        </div>
-
-                        <div className="form-group">
                             <label>By Date</label>
                             <input
                                 type="date"
@@ -137,17 +119,15 @@ const FindOptionModal = ({ ticker, currentPrice, onClose, onSelectOption }) => {
 
                     {results && (
                         <div className="results-container">
-                            <h4>Top Results (Sorted by {showRiskInfo ? 'Risk:Reward' : 'Max Gain %'})</h4>
+                            <h4>Top Results (Sorted by Highest Profit %)</h4>
                             <table className="results-table">
                                 <thead>
                                     <tr>
                                         <th>Expiry</th>
                                         <th>Strike</th>
                                         <th>Cost</th>
-                                        <th>Reward</th>
-                                        {showRiskInfo && <th>Risk</th>}
-                                        {showRiskInfo && <th>R:R</th>}
-                                        {!showRiskInfo && <th>Gain %</th>}
+                                        <th>Projected Profit</th>
+                                        <th>Gain %</th>
                                         <th>Action</th>
                                     </tr>
                                 </thead>
@@ -157,14 +137,12 @@ const FindOptionModal = ({ ticker, currentPrice, onClose, onSelectOption }) => {
                                             <td>{opt.expiry} ({opt.daysToExpiry}d)</td>
                                             <td>${opt.strike}</td>
                                             <td>${opt.ask.toFixed(2)}</td>
-                                            <td className="profit">+${opt.projectedReward.toFixed(2)}</td>
-                                            {showRiskInfo && <td className="loss">-${Math.abs(opt.projectedRisk).toFixed(2)}</td>}
-                                            {showRiskInfo && <td className={`rr-cell ${opt.riskRewardRatio >= 3 ? 'excellent' : 'good'}`}>
-                                                {opt.riskRewardRatio.toFixed(1)}:1
-                                            </td>}
-                                            {!showRiskInfo && <td className="profit-pct">
-                                                +{opt.profitPct?.toFixed(0)}%
-                                            </td>}
+                                            <td className={opt.projectedReward >= 0 ? 'profit' : 'loss'}>
+                                                {opt.projectedReward >= 0 ? '+' : ''}${opt.projectedReward.toFixed(2)}
+                                            </td>
+                                            <td className="profit-pct">
+                                                {opt.profitPct > 0 ? '+' : ''}{opt.profitPct?.toFixed(0)}%
+                                            </td>
                                             <td>
                                                 <button className="select-btn" onClick={() => window.open(`#option/${ticker}/${opt.contractSymbol}`, '_blank')}>
                                                     Analyze
