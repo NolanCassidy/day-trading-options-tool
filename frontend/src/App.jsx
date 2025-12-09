@@ -4,6 +4,7 @@ import ProfitEstimator from './components/ProfitEstimator'
 import StockChart from './components/StockChart'
 import AIAdvisor from './components/AIAdvisor'
 import DbPage from './components/DbPage'
+import FindOptionModal from './components/FindOptionModal'
 import { API_BASE } from './config'
 
 // Parse URL hash for routing
@@ -43,6 +44,7 @@ function App() {
   const [selectedOption, setSelectedOption] = useState(null)
   const [showAIAdvisor, setShowAIAdvisor] = useState(false)
   const [showDbPage, setShowDbPage] = useState(initialState.view === 'db')
+  const [showFindOption, setShowFindOption] = useState(false)
   const [aiScope, setAiScope] = useState('both') // 'calls', 'puts', 'both'
 
   // Filter state
@@ -63,25 +65,63 @@ function App() {
     } else if (initialState.view === 'option' && initialState.ticker && initialState.contractSymbol) {
       // Load option from URL - first load the stock, then select the option
       setTicker(initialState.ticker)
-      handleSearch(null, initialState.ticker).then(() => {
-        // Try to find and select the option by contract symbol
-        const loadOption = async () => {
-          try {
-            const res = await fetch(`${API_BASE}/api/options/${initialState.ticker}`)
-            if (res.ok) {
-              const data = await res.json()
-              const allOptions = [...(data.calls || []), ...(data.puts || [])]
-              const opt = allOptions.find(o => o.contractSymbol === initialState.contractSymbol)
-              if (opt) {
-                handleOptionClick(opt, opt.contractSymbol.includes('C') ? 'CALL' : 'PUT')
-              }
-            }
-          } catch (e) {
-            console.error('Failed to load option from URL:', e)
+      // Use a helper to load and select
+      const loadAndSelect = async (ticker, contractSymbol) => {
+        try {
+          // 1. Fetch data (quote + options)
+          await handleSearch(null, ticker)
+
+          // 2. Fetch specific options chain if we can determine expiry from symbol (SDK dependent) or just search all?
+          // Actually handleSearch fetches default expiry. The option might be on a DIFFERENT expiry.
+          // We need to find which expiry the contract belongs to.
+          // Currently we don't have a quick "lookup contract" endpoint.
+          // BUT usually the contract symbol contains the date: SPY251210... -> 2025-12-10
+
+          let expiryDate = null
+          // Attempt to parse expiry from contract symbol (Format: TickerYYMMDDTypeStrike)
+          // This is a bit hacky but standard for OCC.
+          // Regex: [A-Z]+(\d{6})[CP]\d+
+          const match = contractSymbol.match(/[A-Z]+(\d{6})[CP]\d+/)
+          if (match) {
+            const datePart = match[1]
+            const year = '20' + datePart.substring(0, 2)
+            const month = datePart.substring(2, 4)
+            const day = datePart.substring(4, 6)
+            expiryDate = `${year}-${month}-${day}`
           }
+
+          if (expiryDate) {
+            // Fetch that specific expiry
+            await fetchData(ticker, expiryDate)
+            // Now find the option in the loaded 'options' state? 
+            // Note: fetchData is async but sets state. We can't await the state update easily here without effects.
+            // Better: fetchData returns nothing but sets state. 
+            // We should change fetchData to return the data too, or use a direct fetch here.
+          }
+
+          // Re-fetch options for that expiry to ensure we have the object
+          const res = await fetch(`${API_BASE}/api/options/${ticker}${expiryDate ? `?expiry=${expiryDate}` : ''}`)
+          if (res.ok) {
+            const data = await res.json()
+            // manually set these since fetchData might race
+            setOptions(data)
+            if (data.selectedExpiry) setSelectedExpiry(data.selectedExpiry)
+
+            const allOptions = [...(data.calls || []), ...(data.puts || [])]
+            const opt = allOptions.find(o => o.contractSymbol === contractSymbol)
+
+            if (opt) {
+              // Calculate days to expiry if needed
+              const dte = Math.ceil((new Date(data.selectedExpiry) - new Date()) / (1000 * 60 * 60 * 24))
+              handleOptionClick(opt, ticker, data.selectedExpiry, dte, opt.type)
+            }
+          }
+        } catch (e) {
+          console.error('Failed to load option:', e)
         }
-        loadOption()
-      })
+      }
+
+      loadAndSelect(initialState.ticker, initialState.contractSymbol)
     } else if (initialState.view === 'stock' && initialState.ticker) {
       setTicker(initialState.ticker)
       handleSearch(null, initialState.ticker)
@@ -378,6 +418,13 @@ function App() {
                   {lastQuoteRefresh.toLocaleTimeString()}
                 </span>
               )}
+              <button
+                className="ai-btn"
+                style={{ marginLeft: '10px', background: '#9c27b0' }} // purple for distinct look
+                onClick={() => setShowFindOption(true)}
+              >
+                find option
+              </button>
             </div>
           )}
 
@@ -441,19 +488,73 @@ function App() {
       {/* Database Page */}
       {showDbPage && (
         <DbPage
-          onNavigateToOption={(opt) => {
-            // Navigate to option from watchlist
+          onNavigateToOption={async (opt) => {
+            // Navigate to option from watchlist - Fetch fresh data first
             setShowDbPage(false)
-            setSelectedOption({
-              ...opt,
-              ticker: opt.ticker,
-              strike: opt.strike,
-              expiry: opt.expiry,
-              type: opt.option_type,
-              contractSymbol: opt.contract_symbol,
-              currentPrice: opt.strike // Will be updated when fetching
-            })
-            updateURL('option', opt.ticker, opt.contract_symbol)
+
+            // Parse expiry from contract symbol if not explicitly provided
+            // DB opt usually has: ticker, strike, expiry, option_type, contract_symbol
+            const symbol = opt.contract_symbol
+            const ticker = opt.ticker
+            const expiry = opt.expiry // DB usually has this
+
+            // Update URL immediately
+            updateURL('option', ticker, symbol)
+
+            try {
+              setLoading(true)
+              // 1. Fetch stock data
+              await handleSearch(null, ticker)
+
+              // 2. Fetch specific options chain
+              // If we have expiry, use it.
+              let fetchExpiry = expiry
+
+              if (!fetchExpiry && symbol) {
+                const match = symbol.match(/[A-Z]+(\d{6})[CP]\d+/)
+                if (match) {
+                  const datePart = match[1]
+                  const year = '20' + datePart.substring(0, 2)
+                  const month = datePart.substring(2, 4)
+                  const day = datePart.substring(4, 6)
+                  fetchExpiry = `${year}-${month}-${day}`
+                }
+              }
+
+              if (fetchExpiry) {
+                await fetchData(ticker, fetchExpiry)
+
+                // 3. Find and select the option with FRESH data
+                const res = await fetch(`${API_BASE}/api/options/${ticker}?expiry=${fetchExpiry}`)
+                if (res.ok) {
+                  const data = await res.json()
+                  const allOptions = [...(data.calls || []), ...(data.puts || [])]
+                  const freshOpt = allOptions.find(o => o.contractSymbol === symbol)
+
+                  if (freshOpt) {
+                    const dte = Math.ceil((new Date(data.selectedExpiry) - new Date()) / (1000 * 60 * 60 * 24))
+                    handleOptionClick(freshOpt, ticker, data.selectedExpiry, dte, freshOpt.type)
+                  } else {
+                    // Fallback if not found (maybe expired?)
+                    console.warn('Option not found in chain, using DB data')
+                    // Need to map DB fields to keys expected by ProfitEstimator
+                    // DB: options usually snake_case or whatever DB schema is.
+                    // ProfitEstimator expects camelCase: strike, lastPrice, etc.
+                    // opt from DBPage might need mapping.
+                    handleOptionClick({
+                      ...opt,
+                      type: opt.option_type,
+                      contractSymbol: opt.contract_symbol,
+                      lastPrice: 0 // fallback
+                    }, ticker, expiry, 0, opt.option_type)
+                  }
+                }
+              }
+            } catch (e) {
+              console.error('Error navigating to option:', e)
+            } finally {
+              setLoading(false)
+            }
           }}
         />
       )}

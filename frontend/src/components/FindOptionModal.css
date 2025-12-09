@@ -1,0 +1,224 @@
+.find-option-modal {
+    width: 600px;
+    max-width: 95vw;
+    background: #1e1e1e;
+    color: #e0e0e0;
+    border-radius: 8px;
+    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.5);
+    display: flex;
+    flex-direction: column;
+    max-height: 90vh;
+}
+
+.modal-header {
+    padding: 16px 20px;
+    background: #252525;
+    border-bottom: 1px solid #333;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    border-radius: 8px 8px 0 0;
+}
+
+.modal-header h3 {
+    margin: 0;
+    font-size: 1.2rem;
+    color: #fff;
+}
+
+.close-btn {
+    background: none;
+    border: none;
+    color: #888;
+    font-size: 1.5rem;
+    cursor: pointer;
+    padding: 0;
+    line-height: 1;
+}
+
+.close-btn:hover {
+    color: #fff;
+}
+
+.modal-body {
+    padding: 20px;
+    overflow-y: auto;
+}
+
+.input-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 16px;
+    margin-bottom: 20px;
+}
+
+.form-group {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+/* Full width for the toggle/thesis group */
+.form-group:first-child {
+    grid-column: span 2;
+}
+
+.form-group label {
+    font-size: 0.9rem;
+    color: #aaa;
+}
+
+.form-group input {
+    background: #121212;
+    border: 1px solid #333;
+    color: #fff;
+    padding: 10px;
+    border-radius: 4px;
+    font-size: 1rem;
+}
+
+.form-group input:focus {
+    border-color: #2196F3;
+    outline: none;
+}
+
+/* Toggle Buttons */
+.toggle-group {
+    display: flex;
+    gap: 10px;
+}
+
+.toggle-btn {
+    flex: 1;
+    padding: 12px;
+    background: #2a2a2a;
+    border: 1px solid #333;
+    color: #888;
+    cursor: pointer;
+    border-radius: 4px;
+    font-weight: bold;
+    transition: all 0.2s;
+}
+
+.toggle-btn.active.call {
+    background: rgba(76, 175, 80, 0.2);
+    border-color: #4CAF50;
+    color: #4CAF50;
+}
+
+.toggle-btn.active.put {
+    background: rgba(244, 67, 54, 0.2);
+    border-color: #F44336;
+    color: #F44336;
+}
+
+.find-submit-btn {
+    width: 100%;
+    padding: 14px;
+    background: #2196F3;
+    color: white;
+    border: none;
+    border-radius: 4px;
+    font-size: 1rem;
+    font-weight: bold;
+    cursor: pointer;
+    transition: background 0.2s;
+}
+
+.find-submit-btn:hover:not(:disabled) {
+    background: #1976D2;
+}
+
+.find-submit-btn:disabled {
+    background: #333;
+    color: #888;
+    cursor: not-allowed;
+}
+
+.error-msg {
+    color: #ff5252;
+    margin-top: 10px;
+    text-align: center;
+    background: rgba(255, 82, 82, 0.1);
+    padding: 8px;
+    border-radius: 4px;
+}
+
+/* Results Table */
+.results-container {
+    margin-top: 24px;
+    border-top: 1px solid #333;
+    padding-top: 16px;
+}
+
+.results-container h4 {
+    margin: 0 0 12px 0;
+    color: #ddd;
+    font-size: 1rem;
+}
+
+.results-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.9rem;
+}
+
+.results-table th,
+.results-table td {
+    padding: 10px;
+    text-align: right;
+    border-bottom: 1px solid #333;
+}
+
+.results-table th:first-child,
+.results-table td:first-child {
+    text-align: left;
+}
+
+.results-table th {
+    color: #888;
+    font-weight: normal;
+}
+
+.results-table tr:hover {
+    background: #2a2a2a;
+}
+
+.results-table tr.top-pick {
+    background: rgba(33, 150, 243, 0.1);
+}
+
+.profit {
+    color: #4CAF50;
+}
+
+.loss {
+    color: #F44336;
+}
+
+.rr-cell {
+    font-weight: bold;
+}
+
+.rr-cell.excellent {
+    color: #4CAF50;
+}
+
+.rr-cell.good {
+    color: #FFC107;
+}
+
+.select-btn {
+    padding: 6px 12px;
+    background: #333;
+    border: 1px solid #444;
+    color: #e0e0e0;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 0.8rem;
+}
+
+.select-btn:hover {
+    background: #444;
+    border-color: #555;
+}

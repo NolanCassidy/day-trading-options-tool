@@ -11,6 +11,7 @@ from services.options import (
     scan_market_options, get_stock_history, detect_unusual_activity,
     get_ai_recommendation, get_option_history, get_quote_lite
 )
+from services.options_search import find_best_options
 from services.database import (
     init_db, get_all_tickers, get_scanner_tickers, add_ticker, remove_ticker,
     get_all_options, add_option, remove_option, is_option_in_watchlist
@@ -140,6 +141,34 @@ async def ai_recommend(request: AIRecommendRequest):
         return data
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Error generating recommendation: {str(e)}")
+
+
+class FindOptionsRequest(BaseModel):
+    ticker: str
+    optionType: str
+    targetPrice: float
+    stopLoss: float
+    targetDate: str
+
+
+@app.post("/api/find-options")
+async def find_options(request: FindOptionsRequest):
+    """Find best options based on user thesis"""
+    try:
+        data = find_best_options(
+            request.ticker,
+            request.targetPrice,
+            request.stopLoss,
+            request.targetDate,
+            request.optionType
+        )
+        if "error" in data:
+            raise HTTPException(status_code=400, detail=data["error"])
+        return data
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Error finding options: {str(e)}")
 
 
 # ============== WATCHLIST API ENDPOINTS ==============
