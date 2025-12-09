@@ -222,3 +222,15 @@
     background: #444;
     border-color: #555;
 }
+
+.profit-pct {
+    color: #4caf50;
+    font-weight: bold;
+}
+
+.optional-label {
+    font-size: 0.8em;
+    color: #888;
+    margin-left: 5px;
+    font-weight: normal;
+}

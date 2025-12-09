@@ -11,20 +11,21 @@ RISK_FREE_RATE = 0.05
 MIN_VOLUME = 1  # Minimum volume to consider
 MIN_OI = 1      # Minimum Open Interest to consider
 
-def find_best_options(ticker: str, target_price: float, stop_loss: float, 
-                      target_date_str: str, option_type: str) -> dict:
+def find_best_options(ticker: str, target_price: float, target_date_str: str, 
+                      option_type: str, stop_loss: float = None) -> dict:
     """
     Find best options based on Risk:Reward ratio given a price target and date.
+    If stop_loss is None, finds options with highest projected profit (Maximize Gain).
     
     Args:
         ticker: Stock symbol
         target_price: Expected stock price at target date
-        stop_loss: Price at which to exit if thesis is wrong
         target_date_str: Date by which target is expected (YYYY-MM-DD)
         option_type: 'CALL' or 'PUT'
+        stop_loss: Price at which to exit if thesis is wrong (Optional)
         
     Returns:
-        Dict with list of options sorted by R:R
+        Dict with list of options sorted by R:R or Profit
     """
     try:
         # 1. Validate inputs
@@ -67,8 +68,6 @@ def find_best_options(ticker: str, target_price: float, stop_loss: float,
                     break
         
         if not valid_expirations:
-             # Just return the last available expiry if none are after target date?
-             # No, strict requirement for target date logic.
              return {
                  "options": [], 
                  "message": f"No expirations found on or after {target_date_str}. Try an earlier date."
@@ -113,8 +112,7 @@ def find_best_options(ticker: str, target_price: float, stop_loss: float,
                     ask = float(row['ask'])
                     last = float(row['lastPrice'])
                     
-                    # Estimate entry price (ask or last if bid/ask wide/missing)
-                    # Using Ask is conservative (buying).
+                    # Estimate entry price
                     entry_cost = ask if ask > 0 else last
                     
                     if entry_cost <= 0: continue
@@ -125,7 +123,6 @@ def find_best_options(ticker: str, target_price: float, stop_loss: float,
                     # --- CORE LOGIC: Project Prices ---
                     
                     # 1. Reward Scenario: Stock hits Target Price at Target Date
-                    # Value of option with `time_remaining_at_target` and stock = target_price
                     projected_reward_price = calculate_option_price(
                         option_type.lower(), 
                         target_price, 
@@ -136,42 +133,25 @@ def find_best_options(ticker: str, target_price: float, stop_loss: float,
                     
                     # Profit = Projected Value - Entry Cost
                     profit = projected_reward_price - entry_cost
+                    profit_pct = (profit / entry_cost) * 100 if entry_cost > 0 else 0
 
-                    # 2. Risk Scenario: Stock hits Stop Loss at Target Date
-                    # Note: Worst case reasoning could also be: Stock hits SL *tomorrow*.
-                    # But user prompt implies "worst case i think itll hit that target" implies holding until date?
-                    # Actually user said "worst case i think itll hit that target". Usually SL is hit BEFORE target.
-                    # But for R:R calc, standard is "Exit at Target vs Exit at SL".
-                    # We assume we hold untill Target Date? Or we assume we hit SL *at* Target Date (worst timing for SL usually is immediate, but theta decay hurts more later).
-                    # Let's align with the prompt: "assuming the target price is reached by the specified date".
-                    # Implementation plan: "Projected Option Price at Stop Loss [at Target Date]"
-                    # This is slightly optimistic for Risk (theta helps shorts, hurts longs). 
-                    # If we hold long, theta decay hurts. So calculating at Target Date is actually conservative for Risk (more time decay).
-                    # Wait, if I hold a call, and price drops to SL at Day 0, I lose Delta. if it drops to SL at Day N, I lose Delta + Theta.
-                    # So calculating risk at Target Date is the "Max Loss if I hold until date and it's at SL". 
-                    # If SL is hit earlier, loss might be LESS (more time value left).
-                    # So calculating at Target Date is good conservative estimate for "Loss if wrong by date".
+                    loss = 0
+                    rr_ratio = 0
                     
-                    projected_risk_price = calculate_option_price(
-                        option_type.lower(), 
-                        stop_loss, 
-                        strike, 
-                        time_remaining_at_target, 
-                        iv
-                    )
-                    
-                    # Loss = Entry Cost - Projected Value
-                    # (Signed: Risk is usually negative number in my other tool, but here lets make it amount lost)
-                    loss = entry_cost - projected_risk_price 
-                    
-                    if loss <= 0:
-                        # Should not happen for long options unless projected price > entry (which means SL > current for calls? impossible if SL < current)
-                        # If SL is "tight" and stock moves favorably? 
-                        loss = 0.01 # Avoid div by zero
+                    # 2. Risk Scenario (only if Stop Loss provided)
+                    if stop_loss is not None and stop_loss > 0:
+                        projected_risk_price = calculate_option_price(
+                            option_type.lower(), 
+                            stop_loss, 
+                            strike, 
+                            time_remaining_at_target, 
+                            iv
+                        )
+                        loss = entry_cost - projected_risk_price 
+                        if loss <= 0.01: loss = 0.01 # Floor
+                        rr_ratio = profit / loss
 
-                    rr_ratio = profit / loss
-
-                    # Always append (user wants result no matter what)
+                    # Always append
                     results.append({
                          "expiry": expiry,
                          "daysToExpiry": days_to_expiry_total,
@@ -179,21 +159,35 @@ def find_best_options(ticker: str, target_price: float, stop_loss: float,
                          "contractSymbol": row['contractSymbol'],
                          "ask": entry_cost,
                          "projectedReward": profit,
-                         "projectedRisk": -loss, # Display as negative
+                         "projectedRisk": -loss if stop_loss else 0,
                          "riskRewardRatio": rr_ratio,
                          "type": option_type,
-                         "iv": iv
+                         "iv": iv,
+                         "profitPct": profit_pct
                     })
 
             except Exception as e:
                 print(f"Error processing {expiry}: {e}")
                 continue
 
-        # Sort by R:R descending
-        results.sort(key=lambda x: x['riskRewardRatio'], reverse=True)
+        # Sort
+        if stop_loss is not None and stop_loss > 0:
+            # Sort by R:R descending
+            results.sort(key=lambda x: x['riskRewardRatio'], reverse=True)
+        else:
+            # Sort by Profit (absolute or pct? User said "largest gain", could mean %)
+            # "Largest gain" usually implies absolute dollar gain if they have a fixed investment, 
+            # OR % gain if investment varies. 
+            # Usually traders care about % ROI.
+            # Let's sort by Projected Reward (Absolute $) for now as it matches "Reward" column.
+            # But wait, a $1000 option making $100 vs $10 option making $5 (50%).
+            # User probably wants % gain.
+            # Added `profitPct` to dict. I'll sort by that for "max gain" mode.
+            results.sort(key=lambda x: x['profitPct'], reverse=True)
         
         # Return top 20
         return {"options": results[:20]}
+
 
     except Exception as e:
         import traceback

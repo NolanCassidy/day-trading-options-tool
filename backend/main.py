@@ -147,7 +147,7 @@ class FindOptionsRequest(BaseModel):
     ticker: str
     optionType: str
     targetPrice: float
-    stopLoss: float
+    stopLoss: float | None = None
     targetDate: str
 
 

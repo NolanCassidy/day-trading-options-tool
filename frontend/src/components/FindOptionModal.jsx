@@ -25,14 +25,16 @@ const FindOptionModal = ({ ticker, currentPrice, onClose, onSelectOption }) => {
     }, [currentPrice]);
 
     const handleFind = async () => {
-        if (!targetPrice || !stopLoss || !targetDate) {
-            setError('Please fill in all fields');
+        if (!targetPrice || !targetDate) {
+            setError('Please fill in target price and date');
             return;
         }
 
         setLoading(true);
         setError('');
         setResults(null);
+
+        const slValue = stopLoss ? parseFloat(stopLoss) : null;
 
         try {
             const res = await fetch(`${API_BASE}/api/find-options`, {
@@ -42,7 +44,7 @@ const FindOptionModal = ({ ticker, currentPrice, onClose, onSelectOption }) => {
                     ticker,
                     optionType,
                     targetPrice: parseFloat(targetPrice),
-                    stopLoss: parseFloat(stopLoss),
+                    stopLoss: slValue,
                     targetDate
                 })
             });
@@ -64,6 +66,8 @@ const FindOptionModal = ({ ticker, currentPrice, onClose, onSelectOption }) => {
             setLoading(false);
         }
     };
+
+    const showRiskInfo = !!stopLoss;
 
     return (
         <div className="modal-overlay">
@@ -104,10 +108,11 @@ const FindOptionModal = ({ ticker, currentPrice, onClose, onSelectOption }) => {
                         </div>
 
                         <div className="form-group">
-                            <label>Stop Loss ($)</label>
+                            <label>Stop Loss ($) <span className="optional-label">(Optional)</span></label>
                             <input
                                 type="number"
                                 step="0.01"
+                                placeholder="Optional"
                                 value={stopLoss}
                                 onChange={e => setStopLoss(e.target.value)}
                             />
@@ -132,7 +137,7 @@ const FindOptionModal = ({ ticker, currentPrice, onClose, onSelectOption }) => {
 
                     {results && (
                         <div className="results-container">
-                            <h4>Top Results (Sorted by Risk:Reward)</h4>
+                            <h4>Top Results (Sorted by {showRiskInfo ? 'Risk:Reward' : 'Max Gain %'})</h4>
                             <table className="results-table">
                                 <thead>
                                     <tr>
@@ -140,8 +145,9 @@ const FindOptionModal = ({ ticker, currentPrice, onClose, onSelectOption }) => {
                                         <th>Strike</th>
                                         <th>Cost</th>
                                         <th>Reward</th>
-                                        <th>Risk</th>
-                                        <th>R:R</th>
+                                        {showRiskInfo && <th>Risk</th>}
+                                        {showRiskInfo && <th>R:R</th>}
+                                        {!showRiskInfo && <th>Gain %</th>}
                                         <th>Action</th>
                                     </tr>
                                 </thead>
@@ -152,12 +158,15 @@ const FindOptionModal = ({ ticker, currentPrice, onClose, onSelectOption }) => {
                                             <td>${opt.strike}</td>
                                             <td>${opt.ask.toFixed(2)}</td>
                                             <td className="profit">+${opt.projectedReward.toFixed(2)}</td>
-                                            <td className="loss">-${Math.abs(opt.projectedRisk).toFixed(2)}</td>
-                                            <td className={`rr-cell ${opt.riskRewardRatio >= 3 ? 'excellent' : 'good'}`}>
+                                            {showRiskInfo && <td className="loss">-${Math.abs(opt.projectedRisk).toFixed(2)}</td>}
+                                            {showRiskInfo && <td className={`rr-cell ${opt.riskRewardRatio >= 3 ? 'excellent' : 'good'}`}>
                                                 {opt.riskRewardRatio.toFixed(1)}:1
-                                            </td>
+                                            </td>}
+                                            {!showRiskInfo && <td className="profit-pct">
+                                                +{opt.profitPct?.toFixed(0)}%
+                                            </td>}
                                             <td>
-                                                <button className="select-btn" onClick={() => onSelectOption(opt)}>
+                                                <button className="select-btn" onClick={() => window.open(`#option/${ticker}/${opt.contractSymbol}`, '_blank')}>
                                                     Analyze
                                                 </button>
                                             </td>
