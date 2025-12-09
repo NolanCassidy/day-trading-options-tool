@@ -158,7 +158,6 @@ async def find_options(request: FindOptionsRequest):
         data = find_best_options(
             request.ticker,
             request.targetPrice,
-            request.stopLoss,
             request.targetDate,
             request.optionType
         )
