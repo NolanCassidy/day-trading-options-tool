@@ -260,7 +260,7 @@ function App() {
     }
   }
 
-  const handleSearch = (e, tickerOverride = null) => {
+  const handleSearch = async (e, tickerOverride = null) => {
     if (e) e.preventDefault()
     const searchFor = tickerOverride || ticker.trim()
     if (searchFor) {
@@ -270,7 +270,7 @@ function App() {
       setTopVolume(null)
       setOptions(null)
       setQuote(null)
-      fetchData(searchFor)
+      await fetchData(searchFor)
       updateURL('stock', upperTicker)
     }
   }
