@@ -367,6 +367,8 @@ function ProfitEstimator({ option, currentPrice, onClose, onNavigate }) {
     const [liveDayLow, setLiveDayLow] = useState(option.dayLow || 0)
     const [refreshing, setRefreshing] = useState(false)
     const [lastRefresh, setLastRefresh] = useState(null)
+    const [inWatchlist, setInWatchlist] = useState(false)
+    const [watchlistLoading, setWatchlistLoading] = useState(false)
 
     // Use refs for hover to avoid re-renders that cause scroll jump
     const hoverLineRef = useRef(null)
@@ -417,6 +419,57 @@ function ProfitEstimator({ option, currentPrice, onClose, onNavigate }) {
             refreshPrice()
         }
     }, [option.dayHigh, option.dayLow, option.ticker])
+
+    // Check if option is in watchlist on mount
+    useEffect(() => {
+        const checkWatchlist = async () => {
+            if (!option.contractSymbol) return
+            try {
+                const res = await fetch(`${API_BASE}/api/watchlist/options/check/${encodeURIComponent(option.contractSymbol)}`)
+                if (res.ok) {
+                    const data = await res.json()
+                    setInWatchlist(data.inWatchlist)
+                }
+            } catch (e) {
+                console.error('Failed to check watchlist:', e)
+            }
+        }
+        checkWatchlist()
+    }, [option.contractSymbol])
+
+    // Toggle watchlist status
+    const toggleWatchlist = async () => {
+        if (!option.contractSymbol || watchlistLoading) return
+        setWatchlistLoading(true)
+        try {
+            if (inWatchlist) {
+                // Remove from watchlist
+                const res = await fetch(`${API_BASE}/api/watchlist/options/${encodeURIComponent(option.contractSymbol)}`, {
+                    method: 'DELETE'
+                })
+                if (res.ok) setInWatchlist(false)
+            } else {
+                // Add to watchlist
+                const res = await fetch(`${API_BASE}/api/watchlist/options`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        contractSymbol: option.contractSymbol,
+                        ticker: option.ticker,
+                        strike: option.strike,
+                        expiry: option.expiry,
+                        optionType: option.type || 'CALL',
+                        notes: ''
+                    })
+                })
+                if (res.ok) setInWatchlist(true)
+            }
+        } catch (e) {
+            console.error('Failed to toggle watchlist:', e)
+        } finally {
+            setWatchlistLoading(false)
+        }
+    }
 
     // Use Mid Price for entry to match backend R:R logic
     const midPrice = (option.bid && option.ask) ? (option.bid + option.ask) / 2 : option.lastPrice
@@ -790,6 +843,14 @@ function ProfitEstimator({ option, currentPrice, onClose, onNavigate }) {
                         </span>
                     )}
                 </div>
+                <button
+                    className={`watchlist-btn ${inWatchlist ? 'active' : ''}`}
+                    onClick={toggleWatchlist}
+                    disabled={watchlistLoading}
+                    title={inWatchlist ? 'Remove from watchlist' : 'Add to watchlist'}
+                >
+                    {watchlistLoading ? '...' : inWatchlist ? '★ Saved' : '☆ Save'}
+                </button>
             </div>
 
             <div className="estimator-content">

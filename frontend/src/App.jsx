@@ -3,12 +3,15 @@ import './index.css'
 import ProfitEstimator from './components/ProfitEstimator'
 import StockChart from './components/StockChart'
 import AIAdvisor from './components/AIAdvisor'
+import DbPage from './components/DbPage'
 import { API_BASE } from './config'
 
 // Parse URL hash for routing
 const getInitialState = () => {
   const hash = window.location.hash.slice(1) // Remove #
-  if (hash.startsWith('scan')) {
+  if (hash.startsWith('db')) {
+    return { view: 'db', ticker: '', option: null }
+  } else if (hash.startsWith('scan')) {
     return { view: 'scan', ticker: '', option: null }
   } else if (hash.startsWith('option/')) {
     // Format: option/TICKER/CONTRACTSYMBOL
@@ -39,6 +42,7 @@ function App() {
   const [error, setError] = useState('')
   const [selectedOption, setSelectedOption] = useState(null)
   const [showAIAdvisor, setShowAIAdvisor] = useState(false)
+  const [showDbPage, setShowDbPage] = useState(initialState.view === 'db')
   const [aiScope, setAiScope] = useState('both') // 'calls', 'puts', 'both'
 
   // Filter state
@@ -86,7 +90,9 @@ function App() {
 
   // Update URL when state changes  
   const updateURL = (view, tickerVal = '', contractSymbol = '') => {
-    if (view === 'scan') {
+    if (view === 'db') {
+      window.history.replaceState(null, '', '#db')
+    } else if (view === 'scan') {
       window.history.replaceState(null, '', '#scan')
     } else if (view === 'option' && tickerVal && contractSymbol) {
       window.history.replaceState(null, '', `#option/${tickerVal}/${contractSymbol}`)
@@ -95,6 +101,17 @@ function App() {
     } else {
       window.history.replaceState(null, '', '#')
     }
+  }
+
+  // Handle opening DB page
+  const handleOpenDb = () => {
+    setShowDbPage(true)
+    setScanResults(null)
+    setQuote(null)
+    setOptions(null)
+    setTopVolume(null)
+    setSelectedOption(null)
+    updateURL('db')
   }
 
   // Manual refresh state
@@ -270,6 +287,7 @@ function App() {
       setTopVolume(null)
       setOptions(null)
       setQuote(null)
+      setShowDbPage(false)
       await fetchData(searchFor)
       updateURL('stock', upperTicker)
     }
@@ -376,10 +394,21 @@ function App() {
           {/* Market Scanner Button */}
           <button
             className="scan-btn"
-            onClick={handleScan}
+            onClick={() => {
+              setShowDbPage(false)
+              handleScan()
+            }}
             disabled={scanning}
           >
             {scanning ? 'scanning...' : 'scan market'}
+          </button>
+
+          {/* DB Tab Button */}
+          <button
+            className={`db-btn ${showDbPage ? 'active' : ''}`}
+            onClick={handleOpenDb}
+          >
+            db
           </button>
 
           <form className="search-container" onSubmit={handleSearch}>
@@ -401,12 +430,32 @@ function App() {
       {error && <div className="error">{error}</div>}
 
       {/* Empty State */}
-      {!quote && !topVolume && !scanResults && !loading && !scanning && (
+      {!quote && !topVolume && !scanResults && !loading && !scanning && !showDbPage && (
         <div className="empty-state">
           <h2>options scanner</h2>
           <p>Click <strong>scan market</strong> to find high volume options across top stocks</p>
           <p className="or-text">or search for a specific ticker</p>
         </div>
+      )}
+
+      {/* Database Page */}
+      {showDbPage && (
+        <DbPage
+          onNavigateToOption={(opt) => {
+            // Navigate to option from watchlist
+            setShowDbPage(false)
+            setSelectedOption({
+              ...opt,
+              ticker: opt.ticker,
+              strike: opt.strike,
+              expiry: opt.expiry,
+              type: opt.option_type,
+              contractSymbol: opt.contract_symbol,
+              currentPrice: opt.strike // Will be updated when fetching
+            })
+            updateURL('option', opt.ticker, opt.contract_symbol)
+          }}
+        />
       )}
 
       {/* MARKET SCANNER RESULTS */}

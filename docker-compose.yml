@@ -6,6 +6,8 @@ services:
     container_name: options-backend
     restart: always
     network_mode: host
+    volumes:
+      - ./backend/data:/app/data
     environment:
       - PYTHONUNBUFFERED=1
     env_file:

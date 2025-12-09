@@ -28,12 +28,17 @@
 }
 
 /* Prevent auto-zoom on mobile input focus */
-input, select, textarea {
+input,
+select,
+textarea {
   font-size: 16px;
 }
 
 @media (min-width: 768px) {
-  input, select, textarea {
+
+  input,
+  select,
+  textarea {
     font-size: inherit;
   }
 }
@@ -2162,4 +2167,343 @@ tr.itm:hover {
   transform: translate(-50%, -50%);
   color: var(--red);
   font-size: 12px;
+}
+
+/* ===== DB TAB BUTTON ===== */
+.db-btn {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  color: var(--text-secondary);
+  padding: 8px 16px;
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  border-radius: var(--radius);
+  font-family: inherit;
+  transition: all 0.15s;
+  text-transform: lowercase;
+}
+
+.db-btn:hover {
+  border-color: var(--yellow);
+  color: var(--yellow);
+}
+
+.db-btn.active {
+  background: var(--yellow);
+  border-color: var(--yellow);
+  color: var(--bg-primary);
+}
+
+/* ===== DATABASE PAGE ===== */
+.db-page {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+
+.db-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-secondary);
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.db-header h2 {
+  font-size: 14px;
+  font-weight: 600;
+  margin: 0;
+  color: var(--yellow);
+}
+
+.db-tabs {
+  display: flex;
+  gap: 4px;
+}
+
+.db-tab {
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--text-secondary);
+  padding: 6px 14px;
+  font-size: 11px;
+  cursor: pointer;
+  border-radius: var(--radius);
+  font-family: inherit;
+  transition: all 0.15s;
+}
+
+.db-tab:hover {
+  border-color: var(--text-secondary);
+  color: var(--text-primary);
+}
+
+.db-tab.active {
+  background: var(--bg-primary);
+  border-color: var(--blue);
+  color: var(--blue);
+}
+
+.watchlist-content {
+  padding: 16px;
+}
+
+.watchlist-controls {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 16px;
+  margin-bottom: 16px;
+  flex-wrap: wrap;
+}
+
+.add-ticker-form {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.ticker-input {
+  background: var(--bg-primary);
+  border: 1px solid var(--border);
+  color: var(--text-primary);
+  padding: 8px 12px;
+  font-size: 12px;
+  width: 100px;
+  border-radius: var(--radius);
+  font-family: inherit;
+  text-transform: uppercase;
+}
+
+.ticker-input::placeholder {
+  text-transform: none;
+  color: var(--text-muted);
+}
+
+.ticker-input:focus {
+  outline: none;
+  border-color: var(--blue);
+}
+
+.category-select {
+  background: var(--bg-primary);
+  border: 1px solid var(--border);
+  color: var(--text-primary);
+  padding: 8px 12px;
+  font-size: 12px;
+  border-radius: var(--radius);
+  font-family: inherit;
+  min-width: 140px;
+}
+
+.category-select:focus {
+  outline: none;
+  border-color: var(--blue);
+}
+
+.add-btn {
+  background: var(--green);
+  border: none;
+  color: var(--bg-primary);
+  padding: 8px 16px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  border-radius: var(--radius);
+  font-family: inherit;
+  transition: all 0.15s;
+}
+
+.add-btn:hover {
+  background: #00e676;
+  transform: translateY(-1px);
+}
+
+.filter-input {
+  background: var(--bg-primary);
+  border: 1px solid var(--border);
+  color: var(--text-primary);
+  padding: 8px 12px;
+  font-size: 12px;
+  width: 150px;
+  border-radius: var(--radius);
+  font-family: inherit;
+}
+
+.filter-input::placeholder {
+  color: var(--text-muted);
+}
+
+.filter-input:focus {
+  outline: none;
+  border-color: var(--blue);
+}
+
+.error-msg {
+  background: rgba(255, 71, 87, 0.1);
+  border: 1px solid var(--red);
+  color: var(--red);
+  padding: 8px 12px;
+  border-radius: var(--radius);
+  font-size: 12px;
+  margin-bottom: 12px;
+}
+
+.ticker-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.ticker-category {
+  background: var(--bg-primary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 12px;
+}
+
+.category-header {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  margin: 0 0 10px 0;
+}
+
+.ticker-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.ticker-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  padding: 4px 8px;
+  border-radius: var(--radius);
+  font-size: 11px;
+  transition: all 0.15s;
+}
+
+.ticker-chip:hover {
+  border-color: var(--red);
+}
+
+.ticker-chip .ticker-symbol {
+  color: var(--yellow);
+  font-weight: 600;
+}
+
+.remove-chip-btn {
+  background: transparent;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  padding: 0 2px;
+  font-size: 14px;
+  line-height: 1;
+  transition: color 0.15s;
+}
+
+.remove-chip-btn:hover {
+  color: var(--red);
+}
+
+/* Option Watchlist Table */
+.watchlist-table tr {
+  cursor: pointer;
+}
+
+.watchlist-table tr:hover td {
+  background: var(--bg-hover);
+}
+
+.watchlist-table .call-type {
+  color: var(--green);
+  font-weight: 600;
+}
+
+.watchlist-table .put-type {
+  color: var(--red);
+  font-weight: 600;
+}
+
+.watchlist-table .notes-cell {
+  color: var(--text-muted);
+  max-width: 200px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.watchlist-table .date-cell {
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+.remove-btn {
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--text-muted);
+  padding: 4px 8px;
+  border-radius: var(--radius);
+  cursor: pointer;
+  font-size: 10px;
+  transition: all 0.15s;
+}
+
+.remove-btn:hover {
+  background: rgba(255, 71, 87, 0.1);
+  border-color: var(--red);
+  color: var(--red);
+}
+
+.db-page .empty-state {
+  padding: 40px 20px;
+}
+
+.db-page .empty-state .hint {
+  color: var(--text-muted);
+  font-size: 12px;
+  margin-top: 8px;
+}
+
+/* ===== WATCHLIST BUTTON (Profit Estimator) ===== */
+.watchlist-btn {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  color: var(--text-secondary);
+  padding: 8px 14px;
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  border-radius: var(--radius);
+  font-family: inherit;
+  transition: all 0.15s;
+  margin-left: auto;
+}
+
+.watchlist-btn:hover {
+  border-color: var(--yellow);
+  color: var(--yellow);
+}
+
+.watchlist-btn.active {
+  background: rgba(255, 193, 7, 0.15);
+  border-color: var(--yellow);
+  color: var(--yellow);
+}
+
+.watchlist-btn:disabled {
+  opacity: 0.6;
+  cursor: wait;
 }

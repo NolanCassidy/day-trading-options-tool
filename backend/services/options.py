@@ -793,7 +793,18 @@ TOP_STOCKS = [
 
 def scan_market_options(top_n_per_stock: int = 3) -> dict:
     """Scan multiple top stocks and return the most active options across all of them.
-    Uses parallel execution for faster scanning."""
+    Uses parallel execution for faster scanning.
+    Fetches tickers from database watchlist."""
+    
+    # Import database function to get tickers from watchlist
+    try:
+        from services.database import get_scanner_tickers
+        tickers_to_scan = get_scanner_tickers()
+        if not tickers_to_scan:
+            tickers_to_scan = TOP_STOCKS  # Fallback to hardcoded list
+    except Exception:
+        tickers_to_scan = TOP_STOCKS  # Fallback if database not available
+    
     all_calls = []
     all_puts = []
     scanned_stocks = []
@@ -810,7 +821,7 @@ def scan_market_options(top_n_per_stock: int = 3) -> dict:
     # Use ThreadPoolExecutor for parallel fetching (10 workers = ~10x faster)
     with ThreadPoolExecutor(max_workers=10) as executor:
         # Submit all tasks
-        futures = {executor.submit(fetch_stock_options, ticker): ticker for ticker in TOP_STOCKS}
+        futures = {executor.submit(fetch_stock_options, ticker): ticker for ticker in tickers_to_scan}
         
         # Collect results as they complete
         for future in as_completed(futures):
@@ -852,7 +863,7 @@ def scan_market_options(top_n_per_stock: int = 3) -> dict:
     
     return {
         "scannedStocks": scanned_stocks,
-        "totalStocks": len(TOP_STOCKS),
+        "totalStocks": len(tickers_to_scan),
         "timestamp": datetime.now().isoformat(),
         "topCalls": all_calls[:50],  # Top 50 most active calls
         "topPuts": all_puts[:50],    # Top 50 most active puts

@@ -11,6 +11,10 @@ from services.options import (
     scan_market_options, get_stock_history, detect_unusual_activity,
     get_ai_recommendation, get_option_history, get_quote_lite
 )
+from services.database import (
+    init_db, get_all_tickers, get_scanner_tickers, add_ticker, remove_ticker,
+    get_all_options, add_option, remove_option, is_option_in_watchlist
+)
 
 app = FastAPI(
     title="Options Trading API",
@@ -21,11 +25,18 @@ app = FastAPI(
 # Enable CORS for frontend
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173", "http://127.0.0.1:5173", "http://localhost", "http://localhost:80"],
+    allow_origins=["http://localhost:5173", "http://127.0.0.1:5173", "http://localhost", "http://localhost:80", "http://localhost:8420"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.on_event("startup")
+async def startup_event():
+    """Initialize database on startup"""
+    init_db()
+    print("Database initialized")
 
 
 @app.get("/")
@@ -75,7 +86,7 @@ async def top_volume(ticker: str, top_n: int = 10):
 
 @app.get("/api/scan")
 async def market_scan():
-    """Scan top stocks (SPY, QQQ, AAPL, TSLA, etc.) for most active options"""
+    """Scan top stocks for most active options - uses watchlist tickers"""
     try:
         data = scan_market_options()
         return data
@@ -112,6 +123,7 @@ async def option_history(contract_symbol: str, period: str = "1mo", interval: st
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Error fetching option history: {str(e)}")
 
+
 class AIRecommendRequest(BaseModel):
     topCalls: list = []
     topPuts: list = []
@@ -130,6 +142,117 @@ async def ai_recommend(request: AIRecommendRequest):
         raise HTTPException(status_code=400, detail=f"Error generating recommendation: {str(e)}")
 
 
+# ============== WATCHLIST API ENDPOINTS ==============
+
+# --- Ticker Watchlist ---
+
+@app.get("/api/watchlist/tickers")
+async def get_tickers():
+    """Get all tickers in watchlist"""
+    try:
+        return {"tickers": get_all_tickers()}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+class AddTickerRequest(BaseModel):
+    symbol: str
+    category: str = "Other"
+
+
+@app.post("/api/watchlist/tickers")
+async def add_ticker_endpoint(request: AddTickerRequest):
+    """Add a ticker to watchlist"""
+    try:
+        result = add_ticker(request.symbol, request.category)
+        if result["success"]:
+            return result
+        raise HTTPException(status_code=400, detail=result["error"])
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.delete("/api/watchlist/tickers/{symbol}")
+async def remove_ticker_endpoint(symbol: str):
+    """Remove a ticker from watchlist"""
+    try:
+        result = remove_ticker(symbol)
+        if result["success"]:
+            return result
+        raise HTTPException(status_code=404, detail=result["error"])
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# --- Option Watchlist ---
+
+@app.get("/api/watchlist/options")
+async def get_options_watchlist():
+    """Get all options in watchlist"""
+    try:
+        return {"options": get_all_options()}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+class AddOptionRequest(BaseModel):
+    contractSymbol: str
+    ticker: str
+    strike: float
+    expiry: str
+    optionType: str
+    notes: str = ""
+
+
+@app.post("/api/watchlist/options")
+async def add_option_endpoint(request: AddOptionRequest):
+    """Add an option to watchlist"""
+    try:
+        result = add_option(
+            request.contractSymbol,
+            request.ticker,
+            request.strike,
+            request.expiry,
+            request.optionType,
+            request.notes
+        )
+        if result["success"]:
+            return result
+        raise HTTPException(status_code=400, detail=result["error"])
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.delete("/api/watchlist/options/{contract_symbol}")
+async def remove_option_endpoint(contract_symbol: str):
+    """Remove an option from watchlist"""
+    try:
+        result = remove_option(contract_symbol)
+        if result["success"]:
+            return result
+        raise HTTPException(status_code=404, detail=result["error"])
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/watchlist/options/check/{contract_symbol}")
+async def check_option_in_watchlist(contract_symbol: str):
+    """Check if an option is in the watchlist"""
+    try:
+        return {"inWatchlist": is_option_in_watchlist(contract_symbol)}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8000)
+
