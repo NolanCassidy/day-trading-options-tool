@@ -112,6 +112,11 @@ function StockChart({ ticker, strikes = [], defaultPeriod = '3mo', roiCurves = {
     const [loading, setLoading] = useState(false)
     const [error, setError] = useState(null)
     const [showEmas, setShowEmas] = useState({ ema9: true, ema20: true, ema50: false, ema200: false })
+    const [showRoi, setShowRoi] = useState({
+        p100: false, p50: false, p25: false,
+        zero: true,
+        l25: false, l50: false, l100: false
+    })
 
     // Fetch history data
     useEffect(() => {
@@ -301,7 +306,7 @@ function StockChart({ ticker, strikes = [], defaultPeriod = '3mo', roiCurves = {
                 }
 
                 // 1. Zero (Break-even) - Main Line with Background
-                if (roiCurves.zero && roiCurves.zero.length > 0) {
+                if (showRoi.zero && roiCurves.zero && roiCurves.zero.length > 0) {
                     const shiftedZero = shiftCurveToLastCandle(roiCurves.zero)
                     const beSeries = chart.addSeries(LineSeries, {
                         color: '#ffd700', // Gold
@@ -337,14 +342,14 @@ function StockChart({ ticker, strikes = [], defaultPeriod = '3mo', roiCurves = {
                 }
 
                 // Profit Lines (Green tint)
-                addRoiLine(roiCurves.p25, 'rgba(0, 210, 106, 0.6)', '+25%')
-                addRoiLine(roiCurves.p50, 'rgba(0, 210, 106, 0.8)', '+50%')
-                addRoiLine(roiCurves.p100, '#00d26a', '+100%')
+                if (showRoi.p25) addRoiLine(roiCurves.p25, 'rgba(0, 210, 106, 0.6)', '+25%')
+                if (showRoi.p50) addRoiLine(roiCurves.p50, 'rgba(0, 210, 106, 0.8)', '+50%')
+                if (showRoi.p100) addRoiLine(roiCurves.p100, '#00d26a', '+100%')
 
                 // Loss Lines (Red tint)
-                addRoiLine(roiCurves.l25, 'rgba(255, 71, 87, 0.6)', '-25%')
-                addRoiLine(roiCurves.l50, 'rgba(255, 71, 87, 0.8)', '-50%')
-                addRoiLine(roiCurves.l100, '#ff4757', '-100%')
+                if (showRoi.l25) addRoiLine(roiCurves.l25, 'rgba(255, 71, 87, 0.6)', '-25%')
+                if (showRoi.l50) addRoiLine(roiCurves.l50, 'rgba(255, 71, 87, 0.8)', '-50%')
+                if (showRoi.l100) addRoiLine(roiCurves.l100, '#ff4757', '-100%')
             }
 
             return () => {
@@ -454,6 +459,33 @@ function StockChart({ ticker, strikes = [], defaultPeriod = '3mo', roiCurves = {
                             />
                             200
                         </label>
+                    </div>
+                </div>
+                <div className="chart-controls-row-2" style={{ display: 'flex', gap: '12px', marginTop: '6px', alignItems: 'center', paddingLeft: '8px' }}>
+                    <span className="control-label" style={{ fontSize: '11px', color: '#888' }}>ROI:</span>
+                    <div className="roi-toggles" style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+                        {[
+                            { key: 'p100', label: '+100%', color: '#00d26a' },
+                            { key: 'p50', label: '+50%', color: 'rgba(0, 210, 106, 0.8)' },
+                            { key: 'p25', label: '+25%', color: 'rgba(0, 210, 106, 0.6)' },
+                            { key: 'zero', label: 'BE', color: '#ffd700' },
+                            { key: 'l25', label: '-25%', color: 'rgba(255, 71, 87, 0.6)' },
+                            { key: 'l50', label: '-50%', color: 'rgba(255, 71, 87, 0.8)' },
+                            { key: 'l100', label: '-100%', color: '#ff4757' },
+                        ].map(item => (
+                            <label key={item.key} className="roi-toggle" style={{
+                                display: 'flex', alignItems: 'center', gap: '4px', fontSize: '11px', cursor: 'pointer',
+                                opacity: showRoi[item.key] ? 1 : 0.5
+                            }}>
+                                <input
+                                    type="checkbox"
+                                    checked={showRoi[item.key]}
+                                    onChange={e => setShowRoi(s => ({ ...s, [item.key]: e.target.checked }))}
+                                    style={{ accentColor: item.color }}
+                                />
+                                <span style={{ color: item.color }}>{item.label}</span>
+                            </label>
+                        ))}
                     </div>
                 </div>
             </div>

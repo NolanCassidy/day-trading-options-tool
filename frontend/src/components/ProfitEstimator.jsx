@@ -929,7 +929,12 @@ function ProfitEstimator({ option, currentPrice, onClose, onNavigate }) {
 
     // --- Break-Even Curve Calculation ---
 
-    const findBreakevenPriceForTime = (targetOptionValue, timeRemaining, volatility, totalTime, isCall, strikePrice) => {
+    const findBreakevenPriceForTime = (targetOptionValue, timeRemaining, volatility, totalTime, isCall, strikePrice, initialCalibration) => {
+        // If very close to expiry (< 1 hour), use Intrinsic Value approximation for stability
+        if (timeRemaining < 1.0) {
+            return isCall ? strikePrice + targetOptionValue : strikePrice - targetOptionValue
+        }
+
         // Binary search for StockPrice where EstimateOptionValue(...) ~= targetOptionValue
         // For CALLs: higher stock price = higher option value
         // For PUTs: lower stock price = higher option value
@@ -938,7 +943,15 @@ function ProfitEstimator({ option, currentPrice, onClose, onNavigate }) {
         let high = strikePrice * 2.0
         let iterations = 0
 
-        const getVal = (price) => estimateOptionValue(isCall ? 'CALL' : 'PUT', strikePrice, price, timeRemaining, volatility, totalTime)
+        const getVal = (price) => {
+            const rawVal = estimateOptionValue(isCall ? 'CALL' : 'PUT', strikePrice, price, timeRemaining, volatility, totalTime)
+            if (initialCalibration) {
+                const timeProgress = 1 - (timeRemaining / Math.max(1, totalTime))
+                const currentCalibration = initialCalibration * (1 - timeProgress) + 1 * timeProgress
+                return rawVal * currentCalibration
+            }
+            return rawVal
+        }
 
         // Expand search range if needed
         const lowVal = getVal(low)
@@ -987,6 +1000,11 @@ function ProfitEstimator({ option, currentPrice, onClose, onNavigate }) {
         const now = new Date()
         const isCall = optionType === 'CALL'
 
+        // Calculate initial calibration (force model to match entry price at current stock price)
+        // This ensures curves start at the correct P/Lv level relative to current market
+        const bsAtCurrentPrice = estimateOptionValue(optionType, strike, liveCurrentPrice, totalHours, iv, totalHours)
+        const initialCalibration = bsAtCurrentPrice > 0.01 ? entryPrice / bsAtCurrentPrice : 1.0
+
         const generateCurve = (targetValue) => {
             const points = []
             const hoursLeft = totalHours // Start from now (full time remaining)
@@ -999,7 +1017,7 @@ function ProfitEstimator({ option, currentPrice, onClose, onNavigate }) {
 
             for (let i = 0; i <= numPoints; i++) {
                 const tRemaining = hoursLeft - (i * stepHours)
-                const price = findBreakevenPriceForTime(targetValue, Math.max(0.01, tRemaining), iv, totalHours, isCall, strike)
+                const price = findBreakevenPriceForTime(targetValue, Math.max(0.01, tRemaining), iv, totalHours, isCall, strike, initialCalibration)
 
                 const realSecondsToAdd = (stepHours / 6.5) * 24 * 3600
 
