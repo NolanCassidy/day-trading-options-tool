@@ -6,6 +6,7 @@ const FindOptionModal = ({ ticker, currentPrice, onClose, onSelectOption }) => {
     const [optionType, setOptionType] = useState('CALL');
     const [targetPrice, setTargetPrice] = useState('');
     const [targetDate, setTargetDate] = useState('');
+    const [maxOptionPrice, setMaxOptionPrice] = useState('');
     const [loading, setLoading] = useState(false);
     const [results, setResults] = useState(null);
     const [error, setError] = useState('');
@@ -40,7 +41,8 @@ const FindOptionModal = ({ ticker, currentPrice, onClose, onSelectOption }) => {
                     ticker,
                     optionType,
                     targetPrice: parseFloat(targetPrice),
-                    targetDate
+                    targetDate,
+                    maxOptionPrice: maxOptionPrice ? parseFloat(maxOptionPrice) : null
                 })
             });
 
@@ -97,6 +99,17 @@ const FindOptionModal = ({ ticker, currentPrice, onClose, onSelectOption }) => {
                                 step="0.01"
                                 value={targetPrice}
                                 onChange={e => setTargetPrice(e.target.value)}
+                            />
+                        </div>
+
+                        <div className="form-group">
+                            <label>Max Entry Cost ($) <span className="optional-label">(Optional)</span></label>
+                            <input
+                                type="number"
+                                step="0.01"
+                                placeholder="Max premium (e.g. 1.50)"
+                                value={maxOptionPrice}
+                                onChange={e => setMaxOptionPrice(e.target.value)}
                             />
                         </div>
 

@@ -12,7 +12,7 @@ MIN_VOLUME = 1  # Minimum volume to consider
 MIN_OI = 1      # Minimum Open Interest to consider
 
 def find_best_options(ticker: str, target_price: float, target_date_str: str, 
-                      option_type: str) -> dict:
+                      option_type: str, max_option_price: float = None) -> dict:
     """
     Find best options based on projected profit at target date/price.
     
@@ -21,6 +21,7 @@ def find_best_options(ticker: str, target_price: float, target_date_str: str,
         target_price: Expected stock price at target date
         target_date_str: Date by which target is expected (YYYY-MM-DD)
         option_type: 'CALL' or 'PUT'
+        max_option_price: Max entry cost (premium) per share. Soft filter.
         
     Returns:
         Dict with list of options sorted by Projected Profit %
@@ -149,6 +150,13 @@ def find_best_options(ticker: str, target_price: float, target_date_str: str,
             except Exception as e:
                 print(f"Error processing {expiry}: {e}")
                 continue
+
+        # Soft Filter for Max Option Price
+        if max_option_price is not None and max_option_price > 0:
+            filtered_results = [r for r in results if r['ask'] <= max_option_price]
+            if filtered_results:
+                results = filtered_results
+            # If empty, we keep original results (fallback)
 
         # Sort by Profit %
         results.sort(key=lambda x: x['profitPct'], reverse=True)
