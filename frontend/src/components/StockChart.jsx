@@ -285,10 +285,24 @@ function StockChart({ ticker, strikes = [], defaultPeriod = '3mo', roiCurves = {
             }
             window.addEventListener('resize', handleResize)
 
-            // Add ROI Lines
-            if (roiCurves) {
+            // Add ROI Lines - shift to start from last candle time to eliminate gap
+            if (roiCurves && data.candles.length > 0) {
+                const lastCandleTime = data.candles[data.candles.length - 1].time
+
+                // Helper to shift curve times to start from last candle
+                const shiftCurveToLastCandle = (curveData) => {
+                    if (!curveData || curveData.length === 0) return curveData
+                    const originalStartTime = curveData[0].time
+                    const timeShift = lastCandleTime - originalStartTime
+                    return curveData.map(point => ({
+                        ...point,
+                        time: point.time + timeShift
+                    }))
+                }
+
                 // 1. Zero (Break-even) - Main Line with Background
                 if (roiCurves.zero && roiCurves.zero.length > 0) {
+                    const shiftedZero = shiftCurveToLastCandle(roiCurves.zero)
                     const beSeries = chart.addSeries(LineSeries, {
                         color: '#ffd700', // Gold
                         lineWidth: 2,
@@ -298,16 +312,17 @@ function StockChart({ ticker, strikes = [], defaultPeriod = '3mo', roiCurves = {
                         crosshairMarkerVisible: false,
                         title: 'Break Even'
                     })
-                    beSeries.setData(roiCurves.zero)
+                    beSeries.setData(shiftedZero)
 
                     // Attach background plugin
-                    const bgPlugin = new BreakevenBackground(roiCurves.zero, optionType)
+                    const bgPlugin = new BreakevenBackground(shiftedZero, optionType)
                     beSeries.attachPrimitive(bgPlugin)
                 }
 
                 // Helper to add ROI lines
                 const addRoiLine = (data, color, title) => {
                     if (data && data.length > 0) {
+                        const shiftedData = shiftCurveToLastCandle(data)
                         const s = chart.addSeries(LineSeries, {
                             color: color,
                             lineWidth: 1,
@@ -317,7 +332,7 @@ function StockChart({ ticker, strikes = [], defaultPeriod = '3mo', roiCurves = {
                             crosshairMarkerVisible: false,
                             title: title
                         })
-                        s.setData(data)
+                        s.setData(shiftedData)
                     }
                 }
 
@@ -329,6 +344,7 @@ function StockChart({ ticker, strikes = [], defaultPeriod = '3mo', roiCurves = {
                 // Loss Lines (Red tint)
                 addRoiLine(roiCurves.l25, 'rgba(255, 71, 87, 0.6)', '-25%')
                 addRoiLine(roiCurves.l50, 'rgba(255, 71, 87, 0.8)', '-50%')
+                addRoiLine(roiCurves.l100, '#ff4757', '-100%')
             }
 
             return () => {

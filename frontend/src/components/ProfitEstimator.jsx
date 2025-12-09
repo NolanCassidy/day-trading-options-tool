@@ -330,36 +330,32 @@ const EditableAxisLabel = ({ value, onSave }) => {
 function ProfitEstimator({ option, currentPrice, onClose, onNavigate }) {
     const totalHours = ((option.daysToExpiry || 0) + 1) * TRADING_HOURS_PER_DAY
 
-    // Calculate initial time: closest future 30 min interval
-    const getInitialHoursToSell = () => {
+    // Calculate expiry date once for use throughout
+    const expiryDate = useMemo(() => {
+        if (option.expiry) {
+            const parts = option.expiry.split('-')
+            return new Date(parts[0], parts[1] - 1, parts[2], 13, 0) // 1pm PT on expiry
+        } else {
+            const d = new Date()
+            d.setDate(d.getDate() + (option.daysToExpiry || 0))
+            d.setHours(13, 0, 0, 0)
+            return d
+        }
+    }, [option.expiry, option.daysToExpiry])
+
+    // Store actual target date instead of percentage for precision
+    const [targetSellDate, setTargetSellDate] = useState(null) // null = now
+
+    // Derive percentage and hours from target date
+    const { sliderPercent, hoursToSell } = useMemo(() => {
+        if (!targetSellDate) return { sliderPercent: 0, hoursToSell: 0 }
         const now = new Date()
-        const day = now.getDay()
-        const hours = now.getHours() + now.getMinutes() / 60
-        const marketOpen = 6.5 // 6:30 AM
-        const marketClose = 13.0 // 1:00 PM
-
-        // If Weekend (Sat/Sun), default to Start of Day 1 + 30m (0.5)
-        if (day === 0 || day === 6) return 0.5
-
-        // If Before Market Open, default to Start of Day 1 + 30m (0.5)
-        if (hours < marketOpen) return 0.5
-
-        // If After Market Close, default to Start of Day 2 + 30m (6.5 + 0.5 = 7.0)
-        // (Assuming 1 day passed)
-        if (hours >= marketClose) return TRADING_HOURS_PER_DAY + 0.5
-
-        // If During Market Hours
-        const elapsed = hours - marketOpen
-        // Round up to next 0.5 interval
-        // e.g. 0.1 -> 0.5, 0.5 -> 1.0 (if we want STRICTLY future?), user said "if 2:35 go to 3"
-        // 2:35 is 2.58. Ceil(2.58 * 2) / 2 = 3.0. Correct.
-        let nextInterval = Math.ceil(elapsed * 2) / 2
-        if (nextInterval === elapsed) nextInterval += 0.5 // Ensure it moves forward if exactly on dot?
-
-        return Math.max(0.5, nextInterval)
-    }
-
-    const [hoursToSell, setHoursToSell] = useState(getInitialHoursToSell)
+        const totalMs = expiryDate.getTime() - now.getTime()
+        const selectedMs = targetSellDate.getTime() - now.getTime()
+        const percent = totalMs > 0 ? Math.max(0, Math.min(100, (selectedMs / totalMs) * 100)) : 0
+        const hours = (percent / 100) * totalHours
+        return { sliderPercent: percent, hoursToSell: hours }
+    }, [targetSellDate, expiryDate, totalHours])
     const [isDragging, setIsDragging] = useState(false)
     const [liveCurrentPrice, setLiveCurrentPrice] = useState(currentPrice)
     const [chartRange, setChartRange] = useState({ min: null, max: null })
@@ -535,18 +531,32 @@ function ProfitEstimator({ option, currentPrice, onClose, onNavigate }) {
         const step = (maxPrice - minPrice) / 50
 
         // Time REMAINING on option when you sell = total time - time until sell
-        const hoursRemaining = Math.max(0, totalHours - hoursToSell)
+        const hoursRemaining = Math.max(0.01, totalHours - hoursToSell)
+
+        // CALIBRATION: Calculate what BS says at CURRENT price with CURRENT time remaining
+        // Then scale all values so that at now (hoursToSell=0), current price = entryPrice
+        const bsAtCurrentPrice = estimateOptionValue(
+            optionType, strike, liveCurrentPrice, totalHours, iv, totalHours
+        )
+        // If we're at full time (slider=0), calibrate to market price
+        // As slider moves, blend towards raw BS (less calibration needed)
+        const timeProgress = hoursToSell / Math.max(1, totalHours) // 0 = now, 1 = expiry
+        const calibrationFactor = bsAtCurrentPrice > 0.01
+            ? (entryPrice / bsAtCurrentPrice) * (1 - timeProgress) + 1 * timeProgress
+            : 1
 
         const data = []
         for (let price = minPrice; price <= maxPrice; price += step) {
-            const estimatedValue = estimateOptionValue(
+            const rawValue = estimateOptionValue(
                 optionType,
                 strike,
                 price,
-                hoursRemaining,  // Use remaining time, not time to sell!
+                hoursRemaining,
                 iv,
                 totalHours
             )
+            // Apply calibration (more at slider=0, less as we approach expiry)
+            const estimatedValue = rawValue * calibrationFactor
             const profit = (estimatedValue - entryPrice) * 100 // Per contract (100 shares)
 
             data.push({
@@ -586,20 +596,34 @@ function ProfitEstimator({ option, currentPrice, onClose, onNavigate }) {
 
     const entryCost = entryPrice * 100
 
-    // Calculate P/L at daily high and low
+    // Calculate P/L at daily high and low (with calibration)
     const profitAtHigh = useMemo(() => {
         if (!dayHigh) return null
-        const hoursRemaining = Math.max(0, totalHours - hoursToSell)
-        const val = estimateOptionValue(optionType, strike, dayHigh, hoursRemaining, iv, totalHours)
+        const hoursRemaining = Math.max(0.01, totalHours - hoursToSell)
+        const rawVal = estimateOptionValue(optionType, strike, dayHigh, hoursRemaining, iv, totalHours)
+        // Apply same calibration as chart
+        const bsAtCurrentPrice = estimateOptionValue(optionType, strike, liveCurrentPrice, totalHours, iv, totalHours)
+        const timeProgress = hoursToSell / Math.max(1, totalHours)
+        const calibrationFactor = bsAtCurrentPrice > 0.01
+            ? (entryPrice / bsAtCurrentPrice) * (1 - timeProgress) + 1 * timeProgress
+            : 1
+        const val = rawVal * calibrationFactor
         return (val - entryPrice) * 100
-    }, [dayHigh, optionType, strike, hoursToSell, iv, totalHours, entryPrice])
+    }, [dayHigh, optionType, strike, hoursToSell, iv, totalHours, entryPrice, liveCurrentPrice])
 
     const profitAtLow = useMemo(() => {
         if (!dayLow) return null
-        const hoursRemaining = Math.max(0, totalHours - hoursToSell)
-        const val = estimateOptionValue(optionType, strike, dayLow, hoursRemaining, iv, totalHours)
+        const hoursRemaining = Math.max(0.01, totalHours - hoursToSell)
+        const rawVal = estimateOptionValue(optionType, strike, dayLow, hoursRemaining, iv, totalHours)
+        // Apply same calibration as chart
+        const bsAtCurrentPrice = estimateOptionValue(optionType, strike, liveCurrentPrice, totalHours, iv, totalHours)
+        const timeProgress = hoursToSell / Math.max(1, totalHours)
+        const calibrationFactor = bsAtCurrentPrice > 0.01
+            ? (entryPrice / bsAtCurrentPrice) * (1 - timeProgress) + 1 * timeProgress
+            : 1
+        const val = rawVal * calibrationFactor
         return (val - entryPrice) * 100
-    }, [dayLow, optionType, strike, hoursToSell, iv, totalHours, entryPrice])
+    }, [dayLow, optionType, strike, hoursToSell, iv, totalHours, entryPrice, liveCurrentPrice])
 
     // Calculate dynamic Option R:R based on P/L at High vs Low
     const dynamicRR = useMemo(() => {
@@ -625,63 +649,55 @@ function ProfitEstimator({ option, currentPrice, onClose, onNavigate }) {
         return ratio.toFixed(2)
     }, [profitAtHigh, profitAtLow, optionType])
 
-    // Format hours to readable date/time (PT timezone, market 6:30am-1pm)
-    // Format hours to readable date/time (PT timezone, market 6:30am-1pm)
+    // Format time display - use slider percentage to interpolate between now and expiry
     const formatTime = (hours) => {
-        // Use a small offset to prevent exact multiples wrapping to next day start
-        // e.g. 6.5 hours should be "end of day 1" (1pm), not "start of day 2" (6:30am)
-        const adjustedHours = Math.max(0, hours - 0.001)
+        // Calculate what percentage of total time this represents
+        const percent = totalHours > 0 ? (hours / totalHours) * 100 : 0
 
-        const tradingDays = Math.floor(adjustedHours / TRADING_HOURS_PER_DAY)
-        const remainingHours = hours - (tradingDays * TRADING_HOURS_PER_DAY)
+        if (percent === 0) return 'now'
 
-        // Market hours in PT: 6:30am - 1:00pm
-        const marketOpenHour = 6.5
-        const timeOfDay = marketOpenHour + remainingHours
-        const hour = Math.floor(timeOfDay)
-        const mins = Math.round((timeOfDay - hour) * 60)
+        // Parse option expiry date (format: YYYY-MM-DD)
+        let expiryDate
+        if (option.expiry) {
+            const parts = option.expiry.split('-')
+            expiryDate = new Date(parts[0], parts[1] - 1, parts[2], 13, 0) // 1pm PT on expiry
+        } else {
+            // Fallback: calculate from daysToExpiry
+            expiryDate = new Date()
+            expiryDate.setDate(expiryDate.getDate() + (option.daysToExpiry || 0))
+            expiryDate.setHours(13, 0, 0, 0)
+        }
+
+        const now = new Date()
+        const totalMs = expiryDate.getTime() - now.getTime()
+        const targetMs = now.getTime() + (totalMs * percent / 100)
+        const targetDate = new Date(targetMs)
+
+        // Format the date nicely
+        const dayNames = ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat']
+        const dayName = dayNames[targetDate.getDay()]
+        const month = targetDate.getMonth() + 1
+        const day = targetDate.getDate()
+        const year = targetDate.getFullYear().toString().slice(-2)
+
+        const hour = targetDate.getHours()
+        const mins = targetDate.getMinutes()
         const ampm = hour >= 12 ? 'pm' : 'am'
         const displayHour = hour > 12 ? hour - 12 : (hour === 0 ? 12 : hour)
         const timeStr = `${displayHour}:${mins.toString().padStart(2, '0')}${ampm}`
 
-        // Calculate actual date by adding calendar days until we satisfy trading days
-        // AND skipping weekends if we haven't started yet (e.g. valid today is Sunday)
-        const targetDate = new Date()
-
-        // 1. If today is weekend, advance to Monday first as "Day 0"
-        while (targetDate.getDay() === 0 || targetDate.getDay() === 6) {
-            targetDate.setDate(targetDate.getDate() + 1)
-        }
-
-        // 2. Add trading days (skipping weekends)
-        let daysToAdd = tradingDays
-        while (daysToAdd > 0) {
-            targetDate.setDate(targetDate.getDate() + 1)
-            if (targetDate.getDay() !== 0 && targetDate.getDay() !== 6) {
-                daysToAdd--
-            }
-        }
-
-        // 3. Format Date
-        const dayIdx = targetDate.getDay()
-        const dayNames = ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat']
-        const dayName = dayNames[dayIdx]
-        const month = targetDate.getMonth() + 1
-        const day = targetDate.getDate()
-        const year = targetDate.getFullYear().toString().slice(-2)
-        const dateStr = `${month}/${day}/${year}`
-
-        // 4. Format Label
-        const now = new Date()
-        const isToday = targetDate.getDate() === now.getDate() && targetDate.getMonth() === now.getMonth()
-        const isTomorrow = targetDate.getDate() === now.getDate() + 1 // Simple check (issues with month end but ok for now)
+        // Check if it's today or tomorrow
+        const isToday = targetDate.toDateString() === now.toDateString()
+        const tomorrow = new Date(now)
+        tomorrow.setDate(tomorrow.getDate() + 1)
+        const isTomorrow = targetDate.toDateString() === tomorrow.toDateString()
 
         if (isToday) {
-            return `today ${timeStr} (${dateStr})`
+            return `today ${timeStr}`
         } else if (isTomorrow) {
-            return `tomorrow ${timeStr} (${dateStr})`
+            return `tomorrow ${timeStr}`
         } else {
-            return `${dayName} ${timeStr} (${dateStr})`
+            return `${dayName} ${month}/${day}/${year} ${timeStr}`
         }
     }
 
@@ -699,11 +715,18 @@ function ProfitEstimator({ option, currentPrice, onClose, onNavigate }) {
             const price = minP + (maxP - minP) * percent
             hoveredPriceRef.current = price
 
-            // Calculate profit at this price
-            const hoursRemaining = Math.max(0, totalHours - hoursToSell)
-            const estimatedValue = estimateOptionValue(
+            // Calculate profit at this price (with calibration)
+            const hoursRemaining = Math.max(0.01, totalHours - hoursToSell)
+            const rawValue = estimateOptionValue(
                 optionType, strike, price, hoursRemaining, iv, totalHours
             )
+            // Apply same calibration
+            const bsAtCurrentPrice = estimateOptionValue(optionType, strike, liveCurrentPrice, totalHours, iv, totalHours)
+            const timeProgress = hoursToSell / Math.max(1, totalHours)
+            const calibrationFactor = bsAtCurrentPrice > 0.01
+                ? (entryPrice / bsAtCurrentPrice) * (1 - timeProgress) + 1 * timeProgress
+                : 1
+            const estimatedValue = rawValue * calibrationFactor
             const profit = (estimatedValue - entryPrice) * 100
 
             // Update hover line position directly
@@ -771,7 +794,7 @@ function ProfitEstimator({ option, currentPrice, onClose, onNavigate }) {
 
         const generateCurve = (targetValue) => {
             const points = []
-            const hoursLeft = Math.max(0, totalHours - getInitialHoursToSell())
+            const hoursLeft = totalHours // Start from now (full time remaining)
             if (hoursLeft <= 0) return []
 
             const numPoints = 20
@@ -800,6 +823,7 @@ function ProfitEstimator({ option, currentPrice, onClose, onNavigate }) {
             p100: generateCurve(entryPrice * 2.00),
             l25: generateCurve(entryPrice * 0.75),
             l50: generateCurve(entryPrice * 0.50),
+            l100: generateCurve(entryPrice * 0.01), // Near $0 option value = 100% loss
         }
     }, [option, entryPrice, totalHours, iv, optionType, strike])
 
@@ -891,20 +915,49 @@ function ProfitEstimator({ option, currentPrice, onClose, onNavigate }) {
                 {/* Time Slider */}
                 <div className="time-slider">
                     <div className="time-header">
-                        <label>sell in <strong>{formatTime(hoursToSell)}</strong> <span className="tz-label">PT</span></label>
-                        <span className="time-hint">
-                            {hoursToSell <= TRADING_HOURS_PER_DAY / 2 ? 'morning' :
-                                hoursToSell <= TRADING_HOURS_PER_DAY ? 'end of day' :
-                                    hoursToSell <= TRADING_HOURS_PER_DAY * 2 ? 'tomorrow' : 'later'}
-                        </span>
+                        <label>sell in <strong>{!targetSellDate ? 'now' : formatTime(hoursToSell)}</strong> {targetSellDate && <span className="tz-label">PT</span>}</label>
+                        <div className="time-input-group">
+                            <input
+                                type="datetime-local"
+                                className="datetime-input"
+                                value={targetSellDate ? (() => {
+                                    const pad = n => n.toString().padStart(2, '0')
+                                    return `${targetSellDate.getFullYear()}-${pad(targetSellDate.getMonth() + 1)}-${pad(targetSellDate.getDate())}T${pad(targetSellDate.getHours())}:${pad(targetSellDate.getMinutes())}`
+                                })() : ''}
+                                onChange={(e) => {
+                                    if (!e.target.value) {
+                                        setTargetSellDate(null)
+                                        return
+                                    }
+                                    setTargetSellDate(new Date(e.target.value))
+                                }}
+                                min={new Date().toISOString().slice(0, 16)}
+                                max={option.expiry ? `${option.expiry}T13:00` : undefined}
+                            />
+                            <span className="time-hint">
+                                {sliderPercent === 0 ? 'breakeven' :
+                                    sliderPercent < 10 ? 'short-term' :
+                                        sliderPercent < 50 ? 'mid-term' : 'long-term'}
+                            </span>
+                        </div>
                     </div>
                     <input
                         type="range"
-                        min="0.5"
-                        max={totalHours}
-                        step="0.5"
-                        value={hoursToSell}
-                        onChange={e => setHoursToSell(parseFloat(e.target.value))}
+                        min="0"
+                        max="100"
+                        step="0.1"
+                        value={sliderPercent}
+                        onChange={e => {
+                            const percent = parseFloat(e.target.value)
+                            if (percent === 0) {
+                                setTargetSellDate(null)
+                            } else {
+                                const now = new Date()
+                                const totalMs = expiryDate.getTime() - now.getTime()
+                                const targetMs = now.getTime() + (totalMs * percent / 100)
+                                setTargetSellDate(new Date(targetMs))
+                            }
+                        }}
                     />
                     <div className="slider-labels">
                         <span>now</span>

@@ -2507,3 +2507,30 @@ tr.itm:hover {
   opacity: 0.6;
   cursor: wait;
 }
+
+/* ===== DATETIME INPUT (Time Slider) ===== */
+.time-input-group {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.datetime-input {
+  background: var(--bg-primary);
+  border: 1px solid var(--border);
+  color: var(--text-primary);
+  padding: 4px 8px;
+  font-size: 11px;
+  border-radius: var(--radius);
+  font-family: inherit;
+}
+
+.datetime-input:focus {
+  outline: none;
+  border-color: var(--blue);
+}
+
+.datetime-input::-webkit-calendar-picker-indicator {
+  filter: invert(0.8);
+  cursor: pointer;
+}
