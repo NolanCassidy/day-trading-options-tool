@@ -35,6 +35,16 @@ _cache_ttl = 60  # seconds
 # Risk-free rate (approximate)
 RISK_FREE_RATE = 0.05
 
+def get_default_target_dt():
+    """Returns today 12:30 PST, or tomorrow 12:30 PST if today's time is already passed."""
+    now = datetime.now()
+    # 12:30 PST = 20:30 UTC. Since server might be in a different TZ, 
+    # we align with the 12:30 PST target explicitly.
+    target = now.replace(hour=12, minute=30, second=0, microsecond=0)
+    if now > target:
+        target += timedelta(days=1)
+    return target
+
 
 def calculate_option_risk_metrics(
     option_type: str,
@@ -49,86 +59,102 @@ def calculate_option_risk_metrics(
     ticker: str = ""
 ) -> dict:
     """
-    Unifies profit/loss calculation using the Ratio Calibration Model (matches Profit Estimator).
-    Uses 1638 trading hours per year for consistent time decay.
+    Unifies profit/loss calculation using EXACT logic from ProfitEstimator.jsx.
+    Ports 'estimateOptionValue' JS logic to Python.
     """
-    pct_at_support = 0
-    pct_at_resistance = 0
-    risk_ratio = 0
-    
-    # Constants
-    TRADING_YEAR_HOURS = 252 * 6.5
-    
-    if current_stock_price > 0 and effective_high > 0 and effective_low > 0 and mid_price > 0 and iv > 0:
-        now = datetime.now()
+    def estimate_value(price, hours):
+        T = max(hours, 0.01) / (252 * 6.5)
+        sigma = iv / 100.0
+        r = 0.05
         
-        # 1. Calculate time remaining in trading hours
-        # Hours from now to expiry
-        hours_to_expiry = max(0.1, (expiry_dt - now).total_seconds() / 3600)
-        # Hours from target to expiry
-        hours_at_target = max(0.01, (expiry_dt - target_dt).total_seconds() / 3600)
-        
-        # Ensure target is not after expiry
-        hours_at_target = min(hours_at_target, hours_to_expiry)
-        
-        T_now = hours_to_expiry / TRADING_YEAR_HOURS
-        T_target = hours_at_target / TRADING_YEAR_HOURS
-        
-        # 2. Baseline math (BS)
-        price_current_theo = calculate_option_price(option_type.lower(), current_stock_price, strike, T_now, iv)
-        
-        # 3. Target theory prices
-        price_at_support_theo = calculate_option_price(option_type.lower(), effective_low, strike, T_target, iv)
-        price_at_resistance_theo = calculate_option_price(option_type.lower(), effective_high, strike, T_target, iv)
-        
-        # 4. Ratio Calibration Model: (Theo_Target / Theo_Now) * Mid_Price
-        # This scales the actual market price by the theoretical % move
-        # We add a small epsilon to avoid div by zero
-        expected_price_at_support = mid_price
-        expected_price_at_resistance = mid_price
-        
-        if price_current_theo > 0.001:
-            ratio_support = price_at_support_theo / price_current_theo
-            ratio_resistance = price_at_resistance_theo / price_current_theo
-            
-            # --- PHYSICS GUARDS (DELTA GUARDS) ---
-            # If stock moves against the option, theo price MUST be <= current theo
-            # unless IV increased significantly (which we don't model here)
-            if option_type.upper() == 'CALL':
-                if effective_low <= current_stock_price:
-                    ratio_support = min(ratio_support, 1.0)
-                if effective_high <= current_stock_price:
-                    ratio_resistance = min(ratio_resistance, 1.0)
-            else: # PUT
-                if effective_high >= current_stock_price:
-                    ratio_resistance = min(ratio_resistance, 1.0)
-                if effective_low >= current_stock_price:
-                    ratio_support = min(ratio_support, 1.0)
-
-            expected_price_at_support = mid_price * ratio_support
-            expected_price_at_resistance = mid_price * ratio_resistance
-        
-        # Clamp price
-        expected_price_at_support = max(0.01, expected_price_at_support)
-        expected_price_at_resistance = max(0.01, expected_price_at_resistance)
-        
-        pct_at_support = round(((expected_price_at_support - mid_price) / mid_price) * 100, 1)
-        pct_at_resistance = round(((expected_price_at_resistance - mid_price) / mid_price) * 100, 1)
-        
-        # 5. R:R logic
+        # Intrinsic
         if option_type.upper() == 'CALL':
-            gain_pct = max(0, pct_at_resistance)
-            loss_pct = abs(min(0, pct_at_support))
+            intrinsic = max(0, price - strike)
         else:
-            gain_pct = max(0, pct_at_support)
-            loss_pct = abs(min(0, pct_at_resistance))
+            intrinsic = max(0, strike - price)
             
-        if loss_pct > 0:
-            risk_ratio = round(gain_pct / loss_pct, 2)
-        elif gain_pct > 0:
-            risk_ratio = 99.9
+        if T <= 0.0001 or sigma <= 0 or price <= 0 or strike <= 0:
+            return intrinsic
             
-    # For backward compatibility
+        # BS
+        sqrtT = math.sqrt(T)
+        d1 = (math.log(price / strike) + (r + 0.5 * sigma**2) * T) / (sigma * sqrtT)
+        d2 = d1 - sigma * sqrtT
+        
+        if option_type.upper() == 'CALL':
+            bs_val = price * norm.cdf(d1) - strike * math.exp(-r * T) * norm.cdf(d2)
+        else:
+            bs_val = strike * math.exp(-r * T) * norm.cdf(-d2) - price * norm.cdf(-d1)
+            
+        # --- REALISTIC ADJUSTMENTS (Match JS) ---
+        moneyness = (price - strike) / strike if option_type.upper() == 'CALL' else (strike - price) / strike
+        
+        # OTM Discount
+        otm_discount = 1.0
+        if moneyness < 0:
+            otm_percent = abs(moneyness)
+            otm_discount = math.exp(-otm_percent * 15)
+            if otm_percent > 0.03: otm_discount *= 0.2
+            if otm_percent > 0.05: otm_discount = 0.01
+            
+        # Theta acceleration
+        theta_multiplier = 1.0
+        if hours < 6.5:
+            theta_multiplier = 1.0 + (2.0 * (1 - hours / 6.5))
+        elif hours < 13:
+            theta_multiplier = 1.0 + (0.5 * (1 - hours / 13))
+            
+        time_value = max(0, bs_val - intrinsic)
+        adj_time_value = time_value * otm_discount / theta_multiplier
+        val = intrinsic + adj_time_value
+        
+        # Bid-ask simulation
+        if moneyness < -0.01:
+            spread_discount = 0.92 - (abs(moneyness) * 2)
+            val *= max(0.70, spread_discount)
+            
+        return max(0.01, val)
+
+    now = datetime.now()
+    hours_now = max(0.1, (expiry_dt - now).total_seconds() / 3600)
+    hours_target = max(0.01, (expiry_dt - target_dt).total_seconds() / 3600)
+    hours_target = min(hours_target, hours_now)
+    
+    # Baseline (Theory at CURRENT price to calibrate to Market)
+    theo_now = estimate_value(current_stock_price, hours_now)
+    
+    # Targets
+    theo_support = estimate_value(effective_low, hours_target)
+    theo_resistance = estimate_value(effective_high, hours_target)
+    
+    # Use Ratio Model for calibration: (Theo_Target / Theo_Now) * Mid_Price
+    expected_support = mid_price
+    expected_resistance = mid_price
+    
+    if theo_now > 0.001:
+        ratio_support = theo_support / theo_now
+        ratio_resistance = theo_resistance / theo_now
+        
+        # DELTA GUARD (Physics Check)
+        if option_type.upper() == 'CALL':
+            if effective_low <= current_stock_price: ratio_support = min(ratio_support, 1.0)
+            if effective_high <= current_stock_price: ratio_resistance = min(ratio_resistance, 1.0)
+        else: # PUT
+            if effective_high >= current_stock_price: ratio_resistance = min(ratio_resistance, 1.0)
+            if effective_low >= current_stock_price: ratio_support = min(ratio_support, 1.0)
+            
+        expected_support = mid_price * ratio_support
+        expected_resistance = mid_price * ratio_resistance
+
+    pct_at_support = round(((expected_support - mid_price) / mid_price) * 100, 1) if mid_price > 0 else 0
+    pct_at_resistance = round(((expected_resistance - mid_price) / mid_price) * 100, 1) if mid_price > 0 else 0
+    
+    # R:R
+    gain_pct = max(0, pct_at_resistance if option_type.upper() == 'CALL' else pct_at_support)
+    loss_pct = abs(min(0, pct_at_support if option_type.upper() == 'CALL' else pct_at_resistance))
+    risk_ratio = round(gain_pct / loss_pct, 2) if loss_pct > 0 else (99.9 if gain_pct > 0 else 0)
+    
+    # Back compat
     reversal_pct = pct_at_resistance if option_type.upper() == 'CALL' else pct_at_support
     reversal_profit = round((mid_price * (reversal_pct/100)) * 100, 2)
     
@@ -461,14 +487,14 @@ def get_options_chain(ticker: str, expiry: Optional[str] = None, target_time: Op
     effective_high = resistance_price if resistance_price is not None else day_high
     effective_low = support_price if support_price is not None else day_low
     
-    # Parse target_time or default to today 12:30 PST
+    # Parse target_time or default to today/tomorrow 12:30 PST
     if target_time:
         try:
             target_dt = datetime.fromisoformat(target_time.replace('Z', '+00:00').replace('+00:00', ''))
         except:
-            target_dt = datetime.now().replace(hour=12, minute=30, second=0, microsecond=0)
+            target_dt = get_default_target_dt()
     else:
-        target_dt = datetime.now().replace(hour=12, minute=30, second=0, microsecond=0)
+        target_dt = get_default_target_dt()
 
     # Calculate time to expiry correctly (assume 1:00 PM PST close)
     expiry_dt = datetime.strptime(selected_expiry, '%Y-%m-%d').replace(hour=13, minute=0, second=0)
@@ -567,16 +593,14 @@ def get_top_volume_options(ticker: str, top_n: int = 10, target_time: Optional[s
     support_price = resistance_price = None
     effective_high = effective_low = 0
     
-    # Parse target_time or default to today 12:30 PST
+    # Parse target_time or default to today/tomorrow 12:30 PST
     if target_time:
         try:
             target_dt = datetime.fromisoformat(target_time.replace('Z', '+00:00').replace('+00:00', ''))
         except:
-            # Default to today 12:30 PST (20:30 UTC)
-            target_dt = datetime.now().replace(hour=12, minute=30, second=0, microsecond=0)
+            target_dt = get_default_target_dt()
     else:
-        # Default to today 12:30 PST
-        target_dt = datetime.now().replace(hour=12, minute=30, second=0, microsecond=0)
+        target_dt = get_default_target_dt()
     
     try:
         stock = cached_ticker(ticker)
