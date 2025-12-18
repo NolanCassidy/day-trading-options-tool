@@ -60,11 +60,14 @@ def calculate_option_risk_metrics(
 ) -> dict:
     """
     Unifies profit/loss calculation using EXACT logic from ProfitEstimator.jsx.
-    Ports 'estimateOptionValue' JS logic to Python.
+    Ports 'estimateOptionValue' and 'OptionsMatrix' convergence logic to Python.
     """
+    TRADING_HOURS_PER_DAY = 6.5
+    TRADING_YEAR_HOURS = 252 * TRADING_HOURS_PER_DAY
+    
     def estimate_value(price, hours):
-        T = max(hours, 0.01) / (252 * 6.5)
-        sigma = iv / 100.0
+        T = max(hours, 0.01) / TRADING_YEAR_HOURS
+        sigma = iv # yfinance IV is already decimal (e.g. 0.45)
         r = 0.05
         
         # Intrinsic
@@ -76,7 +79,7 @@ def calculate_option_risk_metrics(
         if T <= 0.0001 or sigma <= 0 or price <= 0 or strike <= 0:
             return intrinsic
             
-        # BS
+        # BS math
         sqrtT = math.sqrt(T)
         d1 = (math.log(price / strike) + (r + 0.5 * sigma**2) * T) / (sigma * sqrtT)
         d2 = d1 - sigma * sqrtT
@@ -89,7 +92,7 @@ def calculate_option_risk_metrics(
         # --- REALISTIC ADJUSTMENTS (Match JS) ---
         moneyness = (price - strike) / strike if option_type.upper() == 'CALL' else (strike - price) / strike
         
-        # OTM Discount
+        # 1. OTM Discount
         otm_discount = 1.0
         if moneyness < 0:
             otm_percent = abs(moneyness)
@@ -97,7 +100,7 @@ def calculate_option_risk_metrics(
             if otm_percent > 0.03: otm_discount *= 0.2
             if otm_percent > 0.05: otm_discount = 0.01
             
-        # Theta acceleration
+        # 2. Theta acceleration
         theta_multiplier = 1.0
         if hours < 6.5:
             theta_multiplier = 1.0 + (2.0 * (1 - hours / 6.5))
@@ -108,7 +111,7 @@ def calculate_option_risk_metrics(
         adj_time_value = time_value * otm_discount / theta_multiplier
         val = intrinsic + adj_time_value
         
-        # Bid-ask simulation
+        # 3. Bid-ask simulation
         if moneyness < -0.01:
             spread_discount = 0.92 - (abs(moneyness) * 2)
             val *= max(0.70, spread_discount)
@@ -116,35 +119,45 @@ def calculate_option_risk_metrics(
         return max(0.01, val)
 
     now = datetime.now()
-    hours_now = max(0.1, (expiry_dt - now).total_seconds() / 3600)
-    hours_target = max(0.01, (expiry_dt - target_dt).total_seconds() / 3600)
-    hours_target = min(hours_target, hours_now)
     
-    # Baseline (Theory at CURRENT price to calibrate to Market)
-    theo_now = estimate_value(current_stock_price, hours_now)
+    # Calculate Total Hours - MATCH JS CEIL LOGIC EXACTLY
+    # JS: Math.ceil((exp - now) / day)
+    diff_days = math.ceil((expiry_dt - now).total_seconds() / 86400)
+    total_hours = (diff_days + 1) * TRADING_HOURS_PER_DAY
     
-    # Targets
+    # Progress from 0 (now) to 1 (expiry)
+    time_to_expiry_total_ms = (expiry_dt - now).total_seconds()
+    time_to_target_ms = (expiry_dt - target_dt).total_seconds()
+    
+    time_progress = 0
+    if time_to_expiry_total_ms > 0:
+        time_progress = max(0, min(1.0, 1.0 - (time_to_target_ms / time_to_expiry_total_ms)))
+    
+    hours_now = total_hours
+    hours_target = max(0.01, total_hours * (1.0 - time_progress))
+    
+    # 1. CALIBRATION
+    bs_at_current = estimate_value(current_stock_price, hours_now)
+    
+    # 2. Convergence Factor: Blends from (Market/Theory) at Progress=0 to 1.0 at Progress=1
+    ratio_now = mid_price / bs_at_current if bs_at_current > 0.01 else 1.0
+    calibration_factor = ratio_now * (1.0 - time_progress) + 1.0 * time_progress
+    
+    # 3. Target Theory Prices
     theo_support = estimate_value(effective_low, hours_target)
     theo_resistance = estimate_value(effective_high, hours_target)
     
-    # Use Ratio Model for calibration: (Theo_Target / Theo_Now) * Mid_Price
-    expected_support = mid_price
-    expected_resistance = mid_price
+    # 4. Final Estimated Values
+    expected_support = theo_support * calibration_factor
+    expected_resistance = theo_resistance * calibration_factor
     
-    if theo_now > 0.001:
-        ratio_support = theo_support / theo_now
-        ratio_resistance = theo_resistance / theo_now
-        
-        # DELTA GUARD (Physics Check)
-        if option_type.upper() == 'CALL':
-            if effective_low <= current_stock_price: ratio_support = min(ratio_support, 1.0)
-            if effective_high <= current_stock_price: ratio_resistance = min(ratio_resistance, 1.0)
-        else: # PUT
-            if effective_high >= current_stock_price: ratio_resistance = min(ratio_resistance, 1.0)
-            if effective_low >= current_stock_price: ratio_support = min(ratio_support, 1.0)
-            
-        expected_support = mid_price * ratio_support
-        expected_resistance = mid_price * ratio_resistance
+    # Delta Guard (Physics Check)
+    if option_type.upper() == 'CALL':
+        if effective_low <= current_stock_price:
+            expected_support = min(expected_support, mid_price)
+    else: # PUT
+        if effective_high >= current_stock_price:
+            expected_resistance = min(expected_resistance, mid_price)
 
     pct_at_support = round(((expected_support - mid_price) / mid_price) * 100, 1) if mid_price > 0 else 0
     pct_at_resistance = round(((expected_resistance - mid_price) / mid_price) * 100, 1) if mid_price > 0 else 0
