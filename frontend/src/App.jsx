@@ -46,6 +46,7 @@ function App() {
   const [showDbPage, setShowDbPage] = useState(initialState.view === 'db')
   const [showFindOption, setShowFindOption] = useState(false)
   const [aiScope, setAiScope] = useState('both') // 'calls', 'puts', 'both'
+  const [tickerLevels, setTickerLevels] = useState({ support: '', resistance: '' })
 
   // Filter state
   const [filters, setFilters] = useState({
@@ -265,6 +266,40 @@ function App() {
     }
   }
 
+  const fetchTickerLevels = async (symbol) => {
+    try {
+      const res = await fetch(`${API_BASE}/api/watchlist/tickers/levels/${symbol}`)
+      if (res.ok) {
+        const data = await res.json()
+        setTickerLevels({
+          support: data.support_price || '',
+          resistance: data.resistance_price || ''
+        })
+      }
+    } catch (e) {
+      console.error('Failed to fetch ticker levels:', e)
+    }
+  }
+
+  const handleUpdateTickerLevels = async (symbol, support, resistance) => {
+    try {
+      const res = await fetch(`${API_BASE}/api/watchlist/tickers/levels/${symbol}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          supportPrice: support !== '' ? parseFloat(support) : null,
+          resistancePrice: resistance !== '' ? parseFloat(resistance) : null
+        })
+      })
+      if (res.ok) {
+        // Refresh data to update R:R calculations
+        fetchData(symbol)
+      }
+    } catch (e) {
+      console.error('Failed to update ticker levels:', e)
+    }
+  }
+
   const fetchData = async (symbol, expiry = null) => {
     if (!symbol) return
 
@@ -329,6 +364,7 @@ function App() {
       setQuote(null)
       setShowDbPage(false)
       await fetchData(searchFor)
+      await fetchTickerLevels(searchFor)
       updateURL('stock', upperTicker)
     }
   }
@@ -755,6 +791,46 @@ function App() {
               </div>
             </div>
           )}
+
+          {/* Custom Support/Resistance Section */}
+          <div className="ticker-levels-control">
+            <div className="levels-header">Technical Targets</div>
+            <div className="levels-inputs">
+              <div className="level-group">
+                <label>Support</label>
+                <input
+                  type="number"
+                  step="0.01"
+                  placeholder="Low"
+                  value={tickerLevels.support}
+                  onChange={(e) => setTickerLevels(prev => ({ ...prev, support: e.target.value }))}
+                  onBlur={() => handleUpdateTickerLevels(searchTicker, tickerLevels.support, tickerLevels.resistance)}
+                  className="ticker-level-input"
+                />
+              </div>
+              <div className="level-group">
+                <label>Resistance</label>
+                <input
+                  type="number"
+                  step="0.01"
+                  placeholder="High"
+                  value={tickerLevels.resistance}
+                  onChange={(e) => setTickerLevels(prev => ({ ...prev, resistance: e.target.value }))}
+                  onBlur={() => handleUpdateTickerLevels(searchTicker, tickerLevels.support, tickerLevels.resistance)}
+                  className="ticker-level-input"
+                />
+              </div>
+              <button
+                className="clear-levels-btn"
+                onClick={() => {
+                  setTickerLevels({ support: '', resistance: '' })
+                  handleUpdateTickerLevels(searchTicker, '', '')
+                }}
+              >
+                Clear
+              </button>
+            </div>
+          </div>
         </div>
       )}
 

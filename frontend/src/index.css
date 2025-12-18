@@ -2673,3 +2673,155 @@ tr.itm:hover {
   color: var(--yellow);
   font-weight: 700;
 }
+
+/* History Source Indicator */
+.history-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 12px;
+}
+
+.header-left {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.source-tag {
+  font-size: 10px;
+  color: var(--text-muted);
+  background: var(--bg-card);
+  padding: 2px 8px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+/* Ticker Level Management */
+.level-input {
+  width: 80px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  color: #fff;
+  padding: 8px 12px;
+  border-radius: 6px;
+  font-size: 12px;
+}
+
+.ticker-chip-expanded {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 140px;
+}
+
+.chip-main {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.chip-levels {
+  display: flex;
+  gap: 4px;
+}
+
+.mini-level-input {
+  width: 100%;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid transparent;
+  color: #fff;
+  padding: 2px 4px;
+  border-radius: 4px;
+  font-size: 11px;
+  transition: all 0.2s;
+}
+
+.mini-level-input:focus {
+  border-color: var(--primary);
+  background: var(--bg-secondary);
+  outline: none;
+}
+
+.ticker-symbol.clickable {
+  cursor: pointer;
+  color: var(--primary);
+  font-weight: 700;
+  font-size: 14px;
+}
+
+.ticker-symbol.clickable:hover {
+  text-decoration: underline;
+}
+
+/* Ticker Levels Control in Quote Card */
+.ticker-levels-control {
+  margin-top: 16px;
+  padding-top: 16px;
+  border-top: 1px solid var(--border);
+}
+
+.levels-header {
+  font-size: 11px;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  margin-bottom: 12px;
+  font-weight: 600;
+}
+
+.levels-inputs {
+  display: flex;
+  gap: 16px;
+  align-items: flex-end;
+}
+
+.level-group {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.level-group label {
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+
+.ticker-level-input {
+  width: 100px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  color: #fff;
+  padding: 8px 12px;
+  border-radius: 6px;
+  font-size: 13px;
+  transition: all 0.2s;
+}
+
+.ticker-level-input:focus {
+  border-color: var(--primary);
+  outline: none;
+  background: var(--bg-card);
+}
+
+.clear-levels-btn {
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--text-muted);
+  padding: 8px 12px;
+  border-radius: 6px;
+  font-size: 11px;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.clear-levels-btn:hover {
+  border-color: var(--red);
+  color: var(--red);
+}

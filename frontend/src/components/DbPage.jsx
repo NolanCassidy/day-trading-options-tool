@@ -19,6 +19,8 @@ function DbPage({ onNavigateToOption }) {
     const [tickersLoading, setTickersLoading] = useState(true)
     const [newTickerSymbol, setNewTickerSymbol] = useState('')
     const [newTickerCategory, setNewTickerCategory] = useState('Other')
+    const [newSupport, setNewSupport] = useState('')
+    const [newResistance, setNewResistance] = useState('')
     const [tickerError, setTickerError] = useState('')
     const [tickerFilter, setTickerFilter] = useState('')
 
@@ -79,7 +81,21 @@ function DbPage({ onNavigateToOption }) {
             })
 
             if (res.ok) {
+                // After adding, if levels were provided, update them
+                if (newSupport || newResistance) {
+                    await fetch(`${API_BASE}/api/watchlist/tickers/levels/${newTickerSymbol.toUpperCase().trim()}`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            supportPrice: newSupport ? parseFloat(newSupport) : null,
+                            resistancePrice: newResistance ? parseFloat(newResistance) : null
+                        })
+                    })
+                }
+
                 setNewTickerSymbol('')
+                setNewSupport('')
+                setNewResistance('')
                 fetchTickers()
             } else {
                 const data = await res.json()
@@ -87,6 +103,24 @@ function DbPage({ onNavigateToOption }) {
             }
         } catch (e) {
             setTickerError('Network error')
+        }
+    }
+
+    const handleUpdateLevels = async (symbol, support, resistance) => {
+        try {
+            const res = await fetch(`${API_BASE}/api/watchlist/tickers/levels/${symbol}`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    supportPrice: support !== '' ? parseFloat(support) : null,
+                    resistancePrice: resistance !== '' ? parseFloat(resistance) : null
+                })
+            })
+            if (res.ok) {
+                fetchTickers()
+            }
+        } catch (e) {
+            console.error('Failed to update levels:', e)
         }
     }
 
@@ -170,6 +204,22 @@ function DbPage({ onNavigateToOption }) {
                                     <option key={cat} value={cat}>{cat}</option>
                                 ))}
                             </select>
+                            <input
+                                type="number"
+                                step="0.01"
+                                placeholder="Support"
+                                value={newSupport}
+                                onChange={(e) => setNewSupport(e.target.value)}
+                                className="level-input"
+                            />
+                            <input
+                                type="number"
+                                step="0.01"
+                                placeholder="Resistance"
+                                value={newResistance}
+                                onChange={(e) => setNewResistance(e.target.value)}
+                                className="level-input"
+                            />
                             <button type="submit" className="add-btn">+ Add</button>
                         </form>
                         <input
@@ -192,15 +242,42 @@ function DbPage({ onNavigateToOption }) {
                                     <h4 className="category-header">{category} ({categoryTickers.length})</h4>
                                     <div className="ticker-chips">
                                         {categoryTickers.sort((a, b) => a.symbol.localeCompare(b.symbol)).map(t => (
-                                            <div key={t.symbol} className="ticker-chip">
-                                                <span className="ticker-symbol">{t.symbol}</span>
-                                                <button
-                                                    className="remove-chip-btn"
-                                                    onClick={() => handleRemoveTicker(t.symbol)}
-                                                    title="Remove"
-                                                >
-                                                    ×
-                                                </button>
+                                            <div key={t.symbol} className="ticker-chip-expanded">
+                                                <div className="chip-main">
+                                                    <span
+                                                        className="ticker-symbol clickable"
+                                                        onClick={() => onNavigateToOption?.({ ticker: t.symbol, type: 'STOCK' })}
+                                                    >
+                                                        {t.symbol}
+                                                    </span>
+                                                    <button
+                                                        className="remove-chip-btn"
+                                                        onClick={() => handleRemoveTicker(t.symbol)}
+                                                        title="Remove"
+                                                    >
+                                                        ×
+                                                    </button>
+                                                </div>
+                                                <div className="chip-levels">
+                                                    <input
+                                                        type="number"
+                                                        step="0.01"
+                                                        placeholder="S"
+                                                        defaultValue={t.support_price || ''}
+                                                        onBlur={(e) => handleUpdateLevels(t.symbol, e.target.value, t.resistance_price)}
+                                                        className="mini-level-input"
+                                                        title="Support Price"
+                                                    />
+                                                    <input
+                                                        type="number"
+                                                        step="0.01"
+                                                        placeholder="R"
+                                                        defaultValue={t.resistance_price || ''}
+                                                        onBlur={(e) => handleUpdateLevels(t.symbol, t.support_price, e.target.value)}
+                                                        className="mini-level-input"
+                                                        title="Resistance Price"
+                                                    />
+                                                </div>
                                             </div>
                                         ))}
                                     </div>

@@ -1,11 +1,10 @@
-version: '3.8'
-
 services:
   backend:
     build: ./backend
     container_name: options-backend
     restart: always
-    network_mode: host
+    ports:
+      - "8000:8000"
     volumes:
       - ./backend/data:/app/data
     environment:

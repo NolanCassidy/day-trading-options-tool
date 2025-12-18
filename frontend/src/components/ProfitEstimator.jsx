@@ -160,29 +160,28 @@ function OptionHistoryChart({ contractSymbol, onBack, embedded = false }) {
             setLoading(true)
             setError(null)
             try {
-                // yfinance: 1m works for up to 7 days, 2m for up to 60 days
-                // IMPORTANT: period='1d' returns NO DATA for options, so use 5d as minimum
-                let yfPeriod = '5d'  // Always fetch at least 5d
+                // Always fetch the maximum reasonable history (1mo) so zooming is consistent
+                // Alpaca can handle 1mo of 1m bars (~7500 candles), yfinance needs careful intervals.
+                let fetchPeriod = '1mo'
                 let interval = '1m'
 
-                if (period === '1mo') {
-                    yfPeriod = '1mo'
-                    interval = '2m'
-                } else if (period === '3mo') {
-                    yfPeriod = '3mo'
+                if (period === '3mo') {
+                    fetchPeriod = '3mo'
                     interval = '2m'
                 }
 
-                const res = await fetch(`${API_BASE}/api/option-history/${contractSymbol}?period=${yfPeriod}&interval=${interval}`)
+                const res = await fetch(`${API_BASE}/api/option-history/${contractSymbol}?period=${fetchPeriod}&interval=${interval}`)
                 const json = await res.json()
 
                 if (json.error || !json.candles || json.candles.length === 0) {
                     setError(json.error || 'No data available')
                     setCandles([])
                 } else {
+                    console.log(`[OptionHistory] Source: ${json.source || 'yfinance'}, Candles: ${json.candles.length}, Period: ${period}`)
+
                     let data = json.candles
 
-                    // Filter for custom periods (1h, 4h, 1d) since we fetch 5d minimum
+                    // Filter for custom periods (1h, 4h, 1d) since we fetch larger minimum
                     if (data.length > 0) {
                         const lastTime = data[data.length - 1].time
                         if (period === '1h') {
@@ -194,6 +193,8 @@ function OptionHistoryChart({ contractSymbol, onBack, embedded = false }) {
                         }
                     }
 
+                    // Attach source for UI display
+                    data.source = json.source || 'yfinance'
                     setCandles(data)
                 }
             } catch (e) {
@@ -221,22 +222,55 @@ function OptionHistoryChart({ contractSymbol, onBack, embedded = false }) {
         }
 
         const chart = createChart(chartContainerRef.current, {
-            layout: { background: { color: 'transparent' }, textColor: '#ccc' },
-            grid: { vertLines: { color: '#333' }, horzLines: { color: '#333' } },
+            layout: {
+                background: { color: 'transparent' },
+                textColor: '#aaa',
+                fontSize: 11,
+                fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif'
+            },
+            grid: {
+                vertLines: { color: '#222' },
+                horzLines: { color: '#222' }
+            },
             width: chartContainerRef.current.clientWidth,
-            height: embedded ? 180 : 250,
+            height: embedded ? 180 : 300,
             timeScale: {
                 timeVisible: true,
-                borderColor: '#444',
-                // Format time better for intraday
+                secondsVisible: false,
+                borderColor: '#333',
+                rightOffset: 12,
+                barSpacing: 6,
+                // Ensure minute-level ticks show up
                 tickMarkFormatter: (time, tickMarkType, locale) => {
                     const date = new Date(time * 1000)
-                    if (period === '1d') return date.toLocaleTimeString(locale, { hour: 'numeric', minute: 'numeric' })
+                    if (period === '1h' || period === '4h' || period === '1d') {
+                        return date.toLocaleTimeString(locale, { hour: 'numeric', minute: '2-digit' })
+                    }
                     if (period === '5d') return date.toLocaleDateString(locale, { weekday: 'short', hour: 'numeric' })
                     return date.toLocaleDateString(locale, { month: 'short', day: 'numeric' })
                 }
             },
-            rightPriceScale: { borderColor: '#444' },
+            rightPriceScale: {
+                borderColor: '#333',
+                scaleMargins: {
+                    top: 0.1,
+                    bottom: 0.1,
+                },
+            },
+            crosshair: {
+                vertLine: {
+                    color: '#444',
+                    width: 1,
+                    style: 1,
+                    labelBackgroundColor: '#222',
+                },
+                horzLine: {
+                    color: '#444',
+                    width: 1,
+                    style: 1,
+                    labelBackgroundColor: '#222',
+                },
+            },
         })
         chartRef.current = chart
 
@@ -244,6 +278,12 @@ function OptionHistoryChart({ contractSymbol, onBack, embedded = false }) {
             lineColor: '#2962FF',
             topColor: 'rgba(41, 98, 255, 0.3)',
             bottomColor: 'rgba(41, 98, 255, 0)',
+            priceFormat: {
+                type: 'price',
+                precision: 2,
+                minMove: 0.01,
+            },
+            lineWidth: 2,
         })
 
         series.setData(candles.map(c => ({
@@ -251,7 +291,25 @@ function OptionHistoryChart({ contractSymbol, onBack, embedded = false }) {
             value: c.close
         })))
 
+        // Zoom to the data
         chart.timeScale().fitContent()
+
+        // Focus on the requested timeframe without restricting the scrollable area
+        if (candles.length > 0) {
+            const lastTime = candles[candles.length - 1].time
+            let startTime = 0
+
+            if (period === '1h') startTime = lastTime - 3600
+            else if (period === '4h') startTime = lastTime - 14400
+            else if (period === '1d') startTime = lastTime - 86400
+
+            if (startTime > 0) {
+                chart.timeScale().setVisibleRange({
+                    from: startTime,
+                    to: lastTime
+                })
+            }
+        }
 
         window.addEventListener('resize', handleResize)
         return () => {
@@ -266,7 +324,15 @@ function OptionHistoryChart({ contractSymbol, onBack, embedded = false }) {
     return (
         <div className={`history-view ${embedded ? 'embedded' : ''}`}>
             <div className="history-header">
-                {!embedded && <button className="back-btn" onClick={onBack}>← Back</button>}
+                {!embedded && (
+                    <div className="header-left">
+                        <button className="back-btn" onClick={onBack}>← Back</button>
+                        <span className="source-tag">
+                            Source: {candles.source || 'yfinance'}
+                            {candles.source === 'alpaca' ? ' (1-min)' : ''}
+                        </span>
+                    </div>
+                )}
                 <div className="tf-toggles">
                     {['1h', '4h', '1d', '5d', '1mo'].map(p => (
                         <button
@@ -539,6 +605,8 @@ function ProfitEstimator({ option, currentPrice, onClose, onNavigate }) {
     const [chartRange, setChartRange] = useState({ min: null, max: null })
     const [liveDayHigh, setLiveDayHigh] = useState(option.dayHigh || 0)
     const [liveDayLow, setLiveDayLow] = useState(option.dayLow || 0)
+    const [actualHigh, setActualHigh] = useState(option.actualHigh || option.dayHigh || 0)
+    const [actualLow, setActualLow] = useState(option.actualLow || option.dayLow || 0)
     const [refreshing, setRefreshing] = useState(false)
     const [lastRefresh, setLastRefresh] = useState(null)
     const [inWatchlist, setInWatchlist] = useState(false)
@@ -1220,24 +1288,28 @@ function ProfitEstimator({ option, currentPrice, onClose, onNavigate }) {
                                 <span className="marker-label">now</span>
                             </div>
 
-                            {/* Daily High marker */}
+                            {/* Daily High marker (Target) */}
                             {dayHigh && dayHigh >= chartData[0]?.stockPrice && dayHigh <= chartData[chartData.length - 1]?.stockPrice && (
                                 <div
                                     className="marker-line high"
                                     style={{
                                         left: `${((dayHigh - chartData[0]?.stockPrice) / (chartData[chartData.length - 1]?.stockPrice - chartData[0]?.stockPrice)) * 100}%`
                                     }}
-                                />
+                                >
+                                    <span className="marker-label">target</span>
+                                </div>
                             )}
 
-                            {/* Daily Low marker */}
+                            {/* Daily Low marker (Target) */}
                             {dayLow && dayLow >= chartData[0]?.stockPrice && dayLow <= chartData[chartData.length - 1]?.stockPrice && (
                                 <div
                                     className="marker-line low"
                                     style={{
                                         left: `${((dayLow - chartData[0]?.stockPrice) / (chartData[chartData.length - 1]?.stockPrice - chartData[0]?.stockPrice)) * 100}%`
                                     }}
-                                />
+                                >
+                                    <span className="marker-label">target</span>
+                                </div>
                             )}
 
                             {/* Profit/loss bars */}
@@ -1268,11 +1340,11 @@ function ProfitEstimator({ option, currentPrice, onClose, onNavigate }) {
                             onSave={val => setChartRange(prev => ({ ...prev, min: val }))}
                         />
                         {dayLow && dayLow >= chartData[0]?.stockPrice && dayLow <= chartData[chartData.length - 1]?.stockPrice && (
-                            <span className="x-label-low">${dayLow.toFixed(0)} <small>low</small></span>
+                            <span className="x-label-low">${dayLow.toFixed(0)} <small>target low</small></span>
                         )}
                         <span>${liveCurrentPrice?.toFixed(0)}</span>
                         {dayHigh && dayHigh >= chartData[0]?.stockPrice && dayHigh <= chartData[chartData.length - 1]?.stockPrice && (
-                            <span className="x-label-high">${dayHigh.toFixed(0)} <small>high</small></span>
+                            <span className="x-label-high">${dayHigh.toFixed(0)} <small>target high</small></span>
                         )}
                         <EditableAxisLabel
                             value={chartData[chartData.length - 1]?.stockPrice}

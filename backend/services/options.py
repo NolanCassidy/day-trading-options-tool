@@ -8,9 +8,10 @@ import time
 import pandas as pd
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from functools import lru_cache
-import math
-from scipy.stats import norm
 import os
+import math
+import traceback
+from services.database import get_ticker_levels
 
 # Gemini AI setup
 try:
@@ -509,9 +510,16 @@ def get_top_volume_options(ticker: str, top_n: int = 10) -> dict:
             day_high = data['day_high']
             day_low = data['day_low']
         except:
-            current_price = 0
-            day_high = 0
-            day_low = 0
+        # Get support/resistance levels from DB
+        levels = get_ticker_levels(ticker)
+        support_price = levels.get('support_price')
+        resistance_price = levels.get('resistance_price')
+        
+        # Override day high/low if custom levels exist
+        # If user has set a custom resistance, use that as the target high
+        # If user has set a custom support, use that as the target low
+        effective_high = resistance_price if resistance_price is not None else day_high
+        effective_low = support_price if support_price is not None else day_low
         
         # Try to get options list with retry
         expirations = None
@@ -614,19 +622,19 @@ def get_top_volume_options(ticker: str, top_n: int = 10) -> dict:
         # Calculate reversal profit (if stock goes back to high for calls, low for puts)
         reversal_profit = 0
         reversal_pct = 0
-        if current_price and day_high and day_low and greeks['delta']:
-            if option_type == 'CALL' and current_price < day_high:
-                # If stock recovers to day high, estimate option profit
-                price_move = day_high - current_price
+        if current_price and effective_high and effective_low and greeks['delta']:
+            if option_type == 'CALL' and current_price < effective_high:
+                # If stock recovers to target high, estimate option profit
+                price_move = effective_high - current_price
                 reversal_profit = round(price_move * abs(greeks['delta']) * 100, 2)  # Per contract
                 reversal_pct = round((price_move * abs(greeks['delta']) / mid_price * 100), 1) if mid_price > 0 else 0
-            elif option_type == 'PUT' and current_price > day_low:
-                # If stock drops to day low, estimate option profit
-                price_move = current_price - day_low
+            elif option_type == 'PUT' and current_price > effective_low:
+                # If stock drops to target low, estimate option profit
+                price_move = current_price - effective_low
                 reversal_profit = round(price_move * abs(greeks['delta']) * 100, 2)  # Per contract
                 reversal_pct = round((price_move * abs(greeks['delta']) / mid_price * 100), 1) if mid_price > 0 else 0
         
-        # Calculate risk/reward ratio (potential gain at high vs loss at low for CALL)
+        # Calculate risk/reward ratio (potential gain at target vs loss at counter-target)
         # For CALL: gain if stock goes to high, loss if stock goes to low
         # For PUT: gain if stock goes to low, loss if stock goes to high
         risk_ratio = 0
@@ -718,11 +726,12 @@ def get_top_volume_options(ticker: str, top_n: int = 10) -> dict:
             # Reversal profit
             "reversalProfit": reversal_profit,
             "reversalPct": reversal_pct,
-            # Risk/Reward ratio
             "riskRatio": risk_ratio,
             # Ensure consistent High/Low data for frontend estimator
-            "dayHigh": day_high,
-            "dayLow": day_low
+            "dayHigh": effective_high,
+            "dayLow": effective_low,
+            "actualHigh": day_high,
+            "actualLow": day_low
         }
     
     # Sort by volume and get top N
@@ -739,9 +748,23 @@ def get_top_volume_options(ticker: str, top_n: int = 10) -> dict:
         "stockPrice": round(current_price, 2) if current_price else 0,
         "dayHigh": round(day_high, 2) if day_high else 0,
         "dayLow": round(day_low, 2) if day_low else 0,
+        "targetHigh": round(effective_high, 2) if effective_high else 0,
+        "targetLow": round(effective_low, 2) if effective_low else 0,
+        "supportPrice": support_price,
+        "resistancePrice": resistance_price,
         "topCalls": top_calls,
         "topPuts": top_puts
     }
+    except Exception as e:
+        traceback.print_exc()
+        return {
+            "symbol": ticker.upper(),
+            "expiry": best_expiry if 'best_expiry' in locals() else None,
+            "daysToExpiry": days_to_expiry if 'days_to_expiry' in locals() else 0,
+            "topCalls": [],
+            "topPuts": [],
+            "error": f"Error scanning options: {str(e)}"
+        }
 
 
 # Top stocks for market scanning - expanded watchlist (~100 stocks)
@@ -1108,11 +1131,23 @@ def get_multi_timeframe_technicals(ticker: str) -> dict:
 def get_option_history(contract_symbol: str, period: str = "1mo", interval: str = "1d") -> dict:
     """
     Get historical price data for a specific option contract.
-    Note: Intraday data for options is often unavailable or delayed on free tiers.
+    Uses Alpaca for better granularity (1-min bars), falls back to yfinance.
     """
     import io
     import contextlib
     
+    # Try Alpaca first - provides 1-minute granularity with 15-min delay
+    try:
+        from services.alpaca import get_alpaca_option_bars
+        
+        alpaca_result = get_alpaca_option_bars(contract_symbol, period, interval)
+        if alpaca_result and len(alpaca_result.get('candles', [])) > 0:
+            print(f"[OptionHistory] Using Alpaca data: {len(alpaca_result['candles'])} candles")
+            return alpaca_result
+    except Exception as e:
+        print(f"[OptionHistory] Alpaca failed, falling back to yfinance: {e}")
+    
+    # Fallback to yfinance
     try:
         # Suppress yfinance print statements by redirecting stdout/stderr
         with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
@@ -1176,7 +1211,8 @@ def get_option_history(contract_symbol: str, period: str = "1mo", interval: str 
             "symbol": contract_symbol,
             "period": period,
             "interval": interval,
-            "candles": candles
+            "candles": candles,
+            "source": "yfinance"
         }
     except Exception as e:
         return {"error": str(e), "symbol": contract_symbol}
@@ -1271,16 +1307,21 @@ def get_ai_recommendation(options_data: dict, market_context: dict = None) -> di
                 stock_section = chr(10).join(stock_info_lines) if stock_info_lines else "Stock data unavailable"
                 
                 # Format options for the prompt
+                target_info = ""
+                if options_data.get('supportPrice') or options_data.get('resistancePrice'):
+                    target_info = f"\nUSER-DEFINED LEVELS: Support: ${options_data.get('supportPrice')} | Resistance: ${options_data.get('resistancePrice')}\n(Use these as primary targets for R:R calculations override)\n"
+
                 all_options_list = []
                 for i, c in enumerate(ai_calls[:8]):
-                     all_options_list.append(f"{i+1}. CALL {c.get('ticker')} ${c.get('strike')} exp:{c.get('expiry')} | Price:${c.get('lastPrice'):.2f} Δ:{c.get('delta')} γ:{c.get('gamma')} Score:{c.get('scalpScore')} Rev%:{c.get('reversalPct')}%")
+                     all_options_list.append(f"{i+1}. CALL {c.get('ticker')} ${c.get('strike')} exp:{c.get('expiry')} | Price:${c.get('lastPrice'):.2f} Δ:{c.get('delta')} Score:{c.get('scalpScore')} Target:[{c.get('dayLow')}-{c.get('dayHigh')}] Rev%:{c.get('reversalPct')}%")
                 
                 for i, p in enumerate(ai_puts[:8]):
-                     all_options_list.append(f"{i+1+len(ai_calls[:8])}. PUT {p.get('ticker')} ${p.get('strike')} exp:{p.get('expiry')} | Price:${p.get('lastPrice'):.2f} Δ:{p.get('delta')} γ:{p.get('gamma')} Score:{p.get('scalpScore')} Rev%:{p.get('reversalPct')}%")
+                     all_options_list.append(f"{i+1+len(ai_calls[:8])}. PUT {p.get('ticker')} ${p.get('strike')} exp:{p.get('expiry')} | Price:${p.get('lastPrice'):.2f} Δ:{p.get('delta')} Score:{p.get('scalpScore')} Target:[{p.get('dayLow')}-{p.get('dayHigh')}] Rev%:{p.get('reversalPct')}%")
 
                 options_list_str = chr(10).join(all_options_list)
                 
                 prompt = f"""You are an expert options day trader specializing in quick scalping plays. Analyze ALL these options and pick THE SINGLE BEST one for a quick scalp trade (hold for minutes to hours). 
+{target_info}
 TARGET: Look for options that can deliver 10-80% returns on a 0.5% - 5% quick stock move. Avoid options that are too far OTM to profit from small moves.
 
 STOCK TECHNICAL DATA (MULTI-TIMEFRAME):
@@ -1288,6 +1329,7 @@ STOCK TECHNICAL DATA (MULTI-TIMEFRAME):
 
 OPTIONS TO ANALYZE:
 {options_list_str}
+
 
 CRITERIA TO CONSIDER:
 - **STRIKE SELECTION (CRITICAL)**: PREFER strikes that are At-The-Money (ATM) or slightly Out-Of-The-Money (OTM).

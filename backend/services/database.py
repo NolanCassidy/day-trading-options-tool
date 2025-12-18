@@ -120,6 +120,8 @@ def init_db():
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 symbol TEXT UNIQUE NOT NULL,
                 category TEXT DEFAULT 'Other',
+                support_price REAL,
+                resistance_price REAL,
                 added_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         ''')
@@ -160,7 +162,7 @@ def get_all_tickers() -> List[dict]:
     """Get all tickers from watchlist"""
     with get_db() as conn:
         cursor = conn.cursor()
-        cursor.execute('SELECT symbol, category, added_at FROM ticker_watchlist ORDER BY symbol')
+        cursor.execute('SELECT symbol, category, support_price, resistance_price, added_at FROM ticker_watchlist ORDER BY symbol')
         rows = cursor.fetchall()
         return [dict(row) for row in rows]
 
@@ -199,6 +201,53 @@ def remove_ticker(symbol: str) -> dict:
         if cursor.rowcount > 0:
             return {"success": True, "symbol": symbol}
         return {"success": False, "error": f"{symbol} not found in watchlist"}
+
+
+def update_ticker_levels(symbol: str, support_price: Optional[float] = None, resistance_price: Optional[float] = None) -> dict:
+    """Update support and resistance levels for a ticker"""
+    symbol = symbol.upper().strip()
+    with get_db() as conn:
+        cursor = conn.cursor()
+        
+        updates = []
+        params = []
+        
+        if support_price is not None:
+            updates.append("support_price = ?")
+            params.append(support_price)
+        else:
+            updates.append("support_price = NULL")
+            
+        if resistance_price is not None:
+            updates.append("resistance_price = ?")
+            params.append(resistance_price)
+        else:
+            updates.append("resistance_price = NULL")
+            
+        if not updates:
+            return {"success": False, "error": "No updates provided"}
+            
+        params.append(symbol)
+        query = f"UPDATE ticker_watchlist SET {', '.join(updates)} WHERE symbol = ?"
+        
+        cursor.execute(query, params)
+        conn.commit()
+        
+        if cursor.rowcount > 0:
+            return {"success": True, "symbol": symbol, "support_price": support_price, "resistance_price": resistance_price}
+        return {"success": False, "error": f"{symbol} not found in watchlist"}
+
+
+def get_ticker_levels(symbol: str) -> dict:
+    """Get support and resistance levels for a ticker"""
+    symbol = symbol.upper().strip()
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute('SELECT support_price, resistance_price FROM ticker_watchlist WHERE symbol = ?', (symbol,))
+        row = cursor.fetchone()
+        if row:
+            return dict(row)
+        return {"support_price": None, "resistance_price": None}
 
 
 # ============== OPTION WATCHLIST OPERATIONS ==============

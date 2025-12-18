@@ -14,7 +14,8 @@ from services.options import (
 from services.options_search import find_best_options
 from services.database import (
     init_db, get_all_tickers, get_scanner_tickers, add_ticker, remove_ticker,
-    get_all_options, add_option, remove_option, is_option_in_watchlist
+    get_all_options, add_option, remove_option, is_option_in_watchlist,
+    update_ticker_levels, get_ticker_levels
 )
 
 app = FastAPI(
@@ -212,6 +213,34 @@ async def remove_ticker_endpoint(symbol: str):
         if result["success"]:
             return result
         raise HTTPException(status_code=404, detail=result["error"])
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+class UpdateLevelsRequest(BaseModel):
+    supportPrice: Optional[float] = None
+    resistancePrice: Optional[float] = None
+
+
+@app.get("/api/watchlist/tickers/levels/{symbol}")
+async def get_levels(symbol: str):
+    """Get support/resistance levels for a ticker"""
+    try:
+        return get_ticker_levels(symbol)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/watchlist/tickers/levels/{symbol}")
+async def update_levels(symbol: str, request: UpdateLevelsRequest):
+    """Update support/resistance levels for a ticker"""
+    try:
+        result = update_ticker_levels(symbol, request.supportPrice, request.resistancePrice)
+        if result["success"]:
+            return result
+        raise HTTPException(status_code=400, detail=result["error"])
     except HTTPException:
         raise
     except Exception as e:

@@ -280,6 +280,39 @@ function StockChart({ ticker, strikes = [], defaultPeriod = '3mo', roiCurves = {
             }))
             )
 
+            // Add Custom Support/Resistance Lines
+            const fetchAndAddLevels = async () => {
+                try {
+                    const res = await fetch(`${API_BASE}/api/watchlist/tickers/levels/${ticker}`)
+                    if (res.ok) {
+                        const levels = await res.json()
+                        if (levels.support_price) {
+                            candlestickSeries.createPriceLine({
+                                price: levels.support_price,
+                                color: '#e91e63', // Pinkish red for support
+                                lineWidth: 2,
+                                lineStyle: 2, // Dashed
+                                axisLabelVisible: true,
+                                title: `Support: $${levels.support_price}`,
+                            })
+                        }
+                        if (levels.resistance_price) {
+                            candlestickSeries.createPriceLine({
+                                price: levels.resistance_price,
+                                color: '#00bcd4', // Cyan for resistance
+                                lineWidth: 2,
+                                lineStyle: 2, // Dashed
+                                axisLabelVisible: true,
+                                title: `Resistance: $${levels.resistance_price}`,
+                            })
+                        }
+                    }
+                } catch (e) {
+                    console.error('Failed to fetch levels for chart:', e)
+                }
+            }
+            fetchAndAddLevels()
+
             chart.timeScale().fitContent()
 
             // Handle resize
