@@ -40,7 +40,7 @@ def calculate_option_risk_metrics(
     option_type: str,
     current_stock_price: float,
     strike: float,
-    current_time_to_expiry: float,
+    expiry_dt: datetime,
     target_dt: datetime,
     iv: float,
     mid_price: float,
@@ -49,38 +49,68 @@ def calculate_option_risk_metrics(
     ticker: str = ""
 ) -> dict:
     """
-    Unifies profit/loss calculation using the Additive Change Model.
-    Pins theoretical $ moves to the actual market mid_price.
+    Unifies profit/loss calculation using the Ratio Calibration Model (matches Profit Estimator).
+    Uses 1638 trading hours per year for consistent time decay.
     """
     pct_at_support = 0
     pct_at_resistance = 0
     risk_ratio = 0
     
+    # Constants
+    TRADING_YEAR_HOURS = 252 * 6.5
+    
     if current_stock_price > 0 and effective_high > 0 and effective_low > 0 and mid_price > 0 and iv > 0:
-        # 1. Current theory baseline
-        price_current_theo = calculate_option_price(option_type.lower(), current_stock_price, strike, current_time_to_expiry, iv)
-        
-        # 2. Target time calculation
         now = datetime.now()
-        time_to_target_hours = (target_dt - now).total_seconds() / 3600
-        if time_to_target_hours <= 0:
-            time_to_target_hours = 24 + time_to_target_hours
-            
-        # Bound target time within trading year hours
-        max_hours = current_time_to_expiry * 252 * 6.5
-        time_to_target_hours = max(0.1, min(time_to_target_hours, max_hours))
-        time_to_target = time_to_target_hours / (252 * 6.5)
+        
+        # 1. Calculate time remaining in trading hours
+        # Hours from now to expiry
+        hours_to_expiry = max(0.1, (expiry_dt - now).total_seconds() / 3600)
+        # Hours from target to expiry
+        hours_at_target = max(0.01, (expiry_dt - target_dt).total_seconds() / 3600)
+        
+        # Ensure target is not after expiry
+        hours_at_target = min(hours_at_target, hours_to_expiry)
+        
+        T_now = hours_to_expiry / TRADING_YEAR_HOURS
+        T_target = hours_at_target / TRADING_YEAR_HOURS
+        
+        # 2. Baseline math (BS)
+        price_current_theo = calculate_option_price(option_type.lower(), current_stock_price, strike, T_now, iv)
         
         # 3. Target theory prices
-        price_at_support_theo = calculate_option_price(option_type.lower(), effective_low, strike, time_to_target, iv)
-        price_at_resistance_theo = calculate_option_price(option_type.lower(), effective_high, strike, time_to_target, iv)
+        price_at_support_theo = calculate_option_price(option_type.lower(), effective_low, strike, T_target, iv)
+        price_at_resistance_theo = calculate_option_price(option_type.lower(), effective_high, strike, T_target, iv)
         
-        # 4. Additive Change Model (pins to mid_price)
-        move_at_support = price_at_support_theo - price_current_theo
-        move_at_resistance = price_at_resistance_theo - price_current_theo
+        # 4. Ratio Calibration Model: (Theo_Target / Theo_Now) * Mid_Price
+        # This scales the actual market price by the theoretical % move
+        # We add a small epsilon to avoid div by zero
+        expected_price_at_support = mid_price
+        expected_price_at_resistance = mid_price
         
-        expected_price_at_support = max(0.01, mid_price + move_at_support)
-        expected_price_at_resistance = max(0.01, mid_price + move_at_resistance)
+        if price_current_theo > 0.001:
+            ratio_support = price_at_support_theo / price_current_theo
+            ratio_resistance = price_at_resistance_theo / price_current_theo
+            
+            # --- PHYSICS GUARDS (DELTA GUARDS) ---
+            # If stock moves against the option, theo price MUST be <= current theo
+            # unless IV increased significantly (which we don't model here)
+            if option_type.upper() == 'CALL':
+                if effective_low <= current_stock_price:
+                    ratio_support = min(ratio_support, 1.0)
+                if effective_high <= current_stock_price:
+                    ratio_resistance = min(ratio_resistance, 1.0)
+            else: # PUT
+                if effective_high >= current_stock_price:
+                    ratio_resistance = min(ratio_resistance, 1.0)
+                if effective_low >= current_stock_price:
+                    ratio_support = min(ratio_support, 1.0)
+
+            expected_price_at_support = mid_price * ratio_support
+            expected_price_at_resistance = mid_price * ratio_resistance
+        
+        # Clamp price
+        expected_price_at_support = max(0.01, expected_price_at_support)
+        expected_price_at_resistance = max(0.01, expected_price_at_resistance)
         
         pct_at_support = round(((expected_price_at_support - mid_price) / mid_price) * 100, 1)
         pct_at_resistance = round(((expected_price_at_resistance - mid_price) / mid_price) * 100, 1)
@@ -440,10 +470,10 @@ def get_options_chain(ticker: str, expiry: Optional[str] = None, target_time: Op
     else:
         target_dt = datetime.now().replace(hour=12, minute=30, second=0, microsecond=0)
 
-    # Calculate time to expiry
-    expiry_date = datetime.strptime(selected_expiry, '%Y-%m-%d')
-    days_to_expiry = (expiry_date - datetime.now()).days
-    time_to_expiry = max(days_to_expiry / 365.0, 0.001)
+    # Calculate time to expiry correctly (assume 1:00 PM PST close)
+    expiry_dt = datetime.strptime(selected_expiry, '%Y-%m-%d').replace(hour=13, minute=0, second=0)
+    # Greeks still use 365-day year for compatibility with standard outputs
+    time_to_expiry_greeks = max((expiry_dt - datetime.now()).total_seconds() / (365 * 24 * 3600), 0.001)
 
     # Helper to process option row
     def process_option_row(row, opt_type):
@@ -456,7 +486,7 @@ def get_options_chain(ticker: str, expiry: Optional[str] = None, target_time: Op
         iv = float(row['impliedVolatility']) if not pd.isna(row['impliedVolatility']) else 0
         
         # Greeks
-        greeks = calculate_greeks(current_price, strike, time_to_expiry, iv, opt_type)
+        greeks = calculate_greeks(current_price, strike, time_to_expiry_greeks, iv, opt_type)
         
         # Vol/OI
         vol_oi_ratio = round(volume / open_interest, 2) if open_interest > 0 else 0
@@ -470,7 +500,7 @@ def get_options_chain(ticker: str, expiry: Optional[str] = None, target_time: Op
         
         # Calculate Risk Metrics
         risk_metrics = calculate_option_risk_metrics(
-            opt_type, current_price, strike, time_to_expiry, target_dt, iv, mid_price, effective_low, effective_high, ticker
+            opt_type, current_price, strike, expiry_dt, target_dt, iv, mid_price, effective_low, effective_high, ticker
         )
         
         return {
@@ -620,8 +650,8 @@ def get_top_volume_options(ticker: str, top_n: int = 10, target_time: Optional[s
             }
         
         # Calculate days to expiry for Greeks
-        days_to_expiry = (datetime.strptime(best_expiry, '%Y-%m-%d').date() - today).days
-        time_to_expiry = max(days_to_expiry, 0.5) / 365.0
+        expiry_dt = datetime.strptime(best_expiry, '%Y-%m-%d').replace(hour=13, minute=0, second=0)
+        time_to_expiry_greeks = max((expiry_dt - datetime.now()).total_seconds() / (365 * 24 * 3600), 0.001)
 
         def format_option(row, option_type):
             strike = float(row['strike'])
@@ -636,7 +666,7 @@ def get_top_volume_options(ticker: str, top_n: int = 10, target_time: Optional[s
             greeks = calculate_greeks(
                 stock_price=current_price if current_price else strike,
                 strike=strike,
-                time_to_expiry=time_to_expiry,
+                time_to_expiry=time_to_expiry_greeks,
                 iv=iv,
                 option_type=option_type.lower()
             )
@@ -654,7 +684,7 @@ def get_top_volume_options(ticker: str, top_n: int = 10, target_time: Optional[s
             
             # Calculate updated Risk Metrics
             risk_metrics = calculate_option_risk_metrics(
-                option_type, current_price, strike, time_to_expiry, target_dt, iv, mid_price, effective_low, effective_high, ticker
+                option_type, current_price, strike, expiry_dt, target_dt, iv, mid_price, effective_low, effective_high, ticker
             )
             
             return {
