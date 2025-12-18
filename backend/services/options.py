@@ -11,6 +11,7 @@ from functools import lru_cache
 import os
 import math
 import traceback
+from scipy.stats import norm
 from services.database import get_ticker_levels
 
 # Gemini AI setup
@@ -146,9 +147,11 @@ def calculate_option_price(option_type: str, stock_price: float, strike: float,
             price = S * norm.cdf(d1) - K * math.exp(-r * T) * norm.cdf(d2)
         else:
             price = K * math.exp(-r * T) * norm.cdf(-d2) - S * norm.cdf(-d1)
-            
+        
+        print(f"[BS DEBUG] {option_type} S={S}, K={K}, T={T:.6f}, sigma={sigma:.4f} -> price={price:.4f}")
         return max(0.01, price) # Minimum value
-    except:
+    except Exception as e:
+        print(f"[BS ERROR] {option_type} S={stock_price}, K={strike}, T={time_to_expiry}, iv={iv} -> Exception: {e}")
         return 0.0
 
 def cached_ticker(ticker: str):
@@ -305,7 +308,7 @@ def get_quote_lite(ticker: str) -> dict:
         return {"error": str(e), "symbol": ticker.upper()}
 
 @with_retry
-def get_options_chain(ticker: str, expiry: Optional[str] = None) -> dict:
+def get_options_chain(ticker: str, expiry: Optional[str] = None, target_time: Optional[str] = None) -> dict:
     """Get options chain for a stock"""
     stock = yf.Ticker(ticker)
     
@@ -344,6 +347,24 @@ def get_options_chain(ticker: str, expiry: Optional[str] = None) -> dict:
     except:
         current_price = day_high = day_low = 0
 
+    # Get support/resistance levels from DB
+    levels = get_ticker_levels(ticker)
+    support_price = levels.get('support_price')
+    resistance_price = levels.get('resistance_price')
+    
+    # Override day high/low if custom levels exist
+    effective_high = resistance_price if resistance_price is not None else day_high
+    effective_low = support_price if support_price is not None else day_low
+    
+    # Parse target_time or default to today 12:30 PST
+    if target_time:
+        try:
+            target_dt = datetime.fromisoformat(target_time.replace('Z', '+00:00').replace('+00:00', ''))
+        except:
+            target_dt = datetime.now().replace(hour=12, minute=30, second=0, microsecond=0)
+    else:
+        target_dt = datetime.now().replace(hour=12, minute=30, second=0, microsecond=0)
+
     # Calculate time to expiry
     expiry_date = datetime.strptime(selected_expiry, '%Y-%m-%d')
     days_to_expiry = (expiry_date - datetime.now()).days
@@ -372,88 +393,58 @@ def get_options_chain(ticker: str, expiry: Optional[str] = None) -> dict:
         # Scalp Score
         scalp_score = calculate_scalp_score(greeks['gamma'], vol_oi_ratio, spread_pct, greeks['delta'])
         
-        # Reversal % - profit if stock returns to daily high (for CALL) or low (for PUT)
-        reversal_pct = 0
+        # Calculate pctAtSupport and pctAtResistance using Black-Scholes
+        # Based on target_dt (exit time) and support/resistance levels
+        pct_at_support = 0
+        pct_at_resistance = 0
         risk_ratio = 0
         
-        if current_price and day_high and day_low and mid_price > 0:
-            # Use Black-Scholes for accurate Risk/Reward
-            # Use Black-Scholes for accurate Risk/Reward
-            # Target P/L calc
+        if current_price > 0 and effective_high > 0 and effective_low > 0 and mid_price > 0 and iv > 0:
+            # Calculate time to target exit (in years)
+            now = datetime.now()
+            time_to_target_hours = max(0.5, (target_dt - now).total_seconds() / 3600)
+            # Convert to years using trading hours (252 days * 6.5 hours/day)
+            time_to_target = time_to_target_hours / (252 * 6.5)
             
-            # Match Frontend: Use Trading Hours Model for Consistency
-            # Logic: Calculate offset based on current time of day "next 30m" logic
+            # Calculate option price at support level at target time
+            price_at_support = calculate_option_price(
+                opt_type.lower(), 
+                effective_low, 
+                strike, 
+                time_to_target, 
+                iv
+            )
             
-            non_trading_deduction = 0.5
-            try:
-                now = datetime.now() # System time (PT)
-                day = now.weekday() # 0=Mon, 6=Sun
-                current_hour = now.hour + now.minute / 60.0
-                market_open = 6.5
-                market_close = 13.0
-                
-                if day >= 5: # Sat/Sun
-                    non_trading_deduction = 0.5
-                elif current_hour < market_open:
-                    non_trading_deduction = 0.5
-                elif current_hour >= market_close:
-                    non_trading_deduction = 6.5 + 0.5 # Start of next day
-                else:
-                    # In market hours
-                    elapsed = current_hour - market_open
-                    next_interval = math.ceil(elapsed * 2) / 2.0
-                    if next_interval == elapsed:
-                        next_interval += 0.5
-                    non_trading_deduction = max(0.5, next_interval)
-            except:
-                non_trading_deduction = 0.5
-
-            # 1. Estimate total trading hours
-            est_trading_days = max(1, days_to_expiry)
-            total_trading_hours = est_trading_days * 6.5
+            # Calculate option price at resistance level at target time
+            price_at_resistance = calculate_option_price(
+                opt_type.lower(), 
+                effective_high, 
+                strike, 
+                time_to_target, 
+                iv
+            )
             
-            # 2. Subtract calculated deduction
-            hours_remaining = max(0.1, total_trading_hours - non_trading_deduction)
+            # Calculate profit/loss % at each level
+            # Positive = profit, Negative = loss
+            pct_at_support = round(((price_at_support - mid_price) / mid_price) * 100, 1) if mid_price > 0 else 0
+            pct_at_resistance = round(((price_at_resistance - mid_price) / mid_price) * 100, 1) if mid_price > 0 else 0
             
-            # 3. Calculate T using Trading Year
-            rr_tte = hours_remaining / (252 * 6.5)
-            
+            # Calculate R:R based on option type
+            # CALL: resistance = TP (gain), support = SL (loss)
+            # PUT: support = TP (gain), resistance = SL (loss)
             if opt_type == 'CALL':
-                # Reward: Price at Day High
-                price_at_high = calculate_option_price('call', day_high, strike, rr_tte, iv)
-                reward = price_at_high - mid_price
-                
-                # Risk: Price at Day Low
-                price_at_low = calculate_option_price('call', day_low, strike, rr_tte, iv)
-                risk = price_at_low - mid_price # Expected to be negative
-                
-                # Reversal % (Bonus metric)
-                # If current < day_high, potential upside
-                if current_price < day_high:
-                    reversal_pct = round((reward / mid_price * 100), 1)
-
-            elif opt_type == 'PUT':
-                # Reward: Price at Day Low
-                price_at_low = calculate_option_price('put', day_low, strike, rr_tte, iv)
-                reward = price_at_low - mid_price
-                
-                # Risk: Price at Day High
-                price_at_high = calculate_option_price('put', day_high, strike, rr_tte, iv)
-                risk = price_at_high - mid_price # Expected to be negative
-
-                # Reversal %
-                # If current > day_low, potential upside
-                if current_price > day_low:
-                     reversal_pct = round((reward / mid_price * 100), 1)
-
-            # Calculate R:R Ratio
-            # If Risk is >= 0 (Profit in both cases), Infinite R:R
-            if risk >= 0:
-                risk_ratio = 999.9 # Effectively infinite
-            elif reward <= 0:
-                risk_ratio = 0.0
+                gain = max(0, pct_at_resistance)
+                loss = abs(min(0, pct_at_support))
+            else:  # PUT
+                gain = max(0, pct_at_support)
+                loss = abs(min(0, pct_at_resistance))
+            
+            if loss > 0:
+                risk_ratio = round(gain / loss, 2)
+            elif gain > 0:
+                risk_ratio = 999.9  # Infinite R:R
             else:
-                risk_ratio = round(reward / abs(risk), 2)
+                risk_ratio = 0
 
 
         return {
@@ -472,7 +463,8 @@ def get_options_chain(ticker: str, expiry: Optional[str] = None) -> dict:
             "delta": greeks['delta'],
             "gamma": greeks['gamma'],
             "scalpScore": scalp_score,
-            "reversalPct": reversal_pct,
+            "pctAtSupport": pct_at_support,
+            "pctAtResistance": pct_at_resistance,
             "riskRatio": risk_ratio,
             "spread": round(ask - bid, 2),
             "type": opt_type
@@ -498,14 +490,32 @@ def get_options_chain(ticker: str, expiry: Optional[str] = None) -> dict:
     }
 
 
-def get_top_volume_options(ticker: str, top_n: int = 10) -> dict:
-    """Get top volume options for near-term expiry (1-2 days out) with Greeks and scalp metrics"""
+def get_top_volume_options(ticker: str, top_n: int = 10, target_time: Optional[str] = None) -> dict:
+    """Get top volume options for near-term expiry (1-2 days out) with Greeks and scalp metrics.
+    
+    Args:
+        ticker: Stock ticker symbol
+        top_n: Number of top options to return per type
+        target_time: Optional ISO datetime string for exit time (e.g., "2025-12-18T12:30:00").
+                     Defaults to today 12:30 PST if not provided.
+    """
     # 1. Initialize variables to handle failures
     current_price = day_high = day_low = 0
     best_expiry = None
     days_to_expiry = 0
     support_price = resistance_price = None
     effective_high = effective_low = 0
+    
+    # Parse target_time or default to today 12:30 PST
+    if target_time:
+        try:
+            target_dt = datetime.fromisoformat(target_time.replace('Z', '+00:00').replace('+00:00', ''))
+        except:
+            # Default to today 12:30 PST (20:30 UTC)
+            target_dt = datetime.now().replace(hour=12, minute=30, second=0, microsecond=0)
+    else:
+        # Default to today 12:30 PST
+        target_dt = datetime.now().replace(hour=12, minute=30, second=0, microsecond=0)
     
     try:
         stock = cached_ticker(ticker)
@@ -611,50 +621,87 @@ def get_top_volume_options(ticker: str, top_n: int = 10) -> dict:
                 delta=greeks['delta']
             )
             
-            reversal_profit = 0
-            reversal_pct = 0
-            if current_price and effective_high and effective_low and greeks['delta']:
-                if option_type == 'CALL' and current_price < effective_high:
-                    price_move = effective_high - current_price
-                    reversal_profit = round(price_move * abs(greeks['delta']) * 100, 2)
-                    reversal_pct = round((price_move * abs(greeks['delta']) / mid_price * 100), 1) if mid_price > 0 else 0
-                elif option_type == 'PUT' and current_price > effective_low:
-                    price_move = current_price - effective_low
-                    reversal_profit = round(price_move * abs(greeks['delta']) * 100, 2)
-                    reversal_pct = round((price_move * abs(greeks['delta']) / mid_price * 100), 1) if mid_price > 0 else 0
-            
+            # Calculate pctAtSupport and pctAtResistance using Black-Scholes Change Model
+            # This pins the theoretical price move to the actual market price
+            pct_at_support = 0
+            pct_at_resistance = 0
             risk_ratio = 0
-            if current_price and day_high and day_low and mid_price > 0:
-                non_trading_deduction = 0.5
-                try:
-                    now = datetime.now()
-                    day = now.weekday()
-                    current_hour = now.hour + now.minute / 60.0
-                    market_open = 6.5
-                    market_close = 13.0
-                    if day >= 5 or current_hour < market_open:
-                        non_trading_deduction = 0.5
-                    elif current_hour >= market_close:
-                        non_trading_deduction = 7.0
-                    else:
-                        elapsed = current_hour - market_open
-                        non_trading_deduction = max(0.5, math.ceil(elapsed * 2) / 2.0)
-                except Exception:
-                    non_trading_deduction = 0.5
+            
+            if current_price > 0 and effective_high > 0 and effective_low > 0 and mid_price > 0 and iv > 0:
+                # 1. Calculate current theoretical price as baseline
+                # Use current time_to_expiry
+                price_current_theo = calculate_option_price(
+                    option_type.lower(),
+                    current_price,
+                    strike,
+                    time_to_expiry,
+                    iv
+                )
+                
+                # 2. Calculate time to target exit (in years)
+                now = datetime.now()
+                time_to_target_hours = (target_dt - now).total_seconds() / 3600
+                if time_to_target_hours <= 0:
+                    # If target is in the past or now, assume it's for tomorrow/next trading session
+                    time_to_target_hours = 24 + time_to_target_hours
+                
+                # Ensure we don't calculate for time after expiry
+                max_hours = time_to_expiry * 252 * 6.5
+                time_to_target_hours = max(0.1, min(time_to_target_hours, max_hours))
+                time_to_target = time_to_target_hours / (252 * 6.5)
+                
+                # 3. Calculate theoretical prices at support/resistance levels at target time
+                price_at_support_theo = calculate_option_price(
+                    option_type.lower(), 
+                    effective_low, 
+                    strike, 
+                    time_to_target, 
+                    iv
+                )
+                
+                price_at_resistance_theo = calculate_option_price(
+                    option_type.lower(), 
+                    effective_high, 
+                    strike, 
+                    time_to_target, 
+                    iv
+                )
+                
+                # 4. Use Additive Change Model: Market Price + (Target Theo - Current Theo)
+                # This is more robust than scaling when prices are near zero
+                move_at_support = price_at_support_theo - price_current_theo
+                move_at_resistance = price_at_resistance_theo - price_current_theo
+                
+                expected_price_at_support = max(0.01, mid_price + move_at_support)
+                expected_price_at_resistance = max(0.01, mid_price + move_at_resistance)
+                
+                pct_at_support = round(((expected_price_at_support - mid_price) / mid_price) * 100, 1)
+                pct_at_resistance = round(((expected_price_at_resistance - mid_price) / mid_price) * 100, 1)
+                
+                # DEBUG: Print all values for verification
+                print(f"[PROFIT CALC] {ticker} {option_type} ${strike}: T_now={time_to_expiry:.6f}, T_target={time_to_target:.6f}")
+                print(f"[PROFIT CALC]   Market={mid_price:.2f}, Theo_Now={price_current_theo:.2f}")
+                print(f"[PROFIT CALC]   Support={effective_low} -> Theo={price_at_support_theo:.2f}, Expected={expected_price_at_support:.2f}, Pct={pct_at_support}%")
+                print(f"[PROFIT CALC]   Resist={effective_high} -> Theo={price_at_resistance_theo:.2f}, Expected={expected_price_at_resistance:.2f}, Pct={pct_at_resistance}%")
 
-                total_trading_hours = max(1, days_to_expiry) * 6.5
-                rr_tte = max(0.1, total_trading_hours - non_trading_deduction) / (252 * 6.5)
-
+                # 5. Calculate R:R based on option type
                 if option_type == 'CALL':
-                    reward = calculate_option_price('call', day_high, strike, rr_tte, iv) - mid_price
-                    risk = calculate_option_price('call', day_low, strike, rr_tte, iv) - mid_price
+                    gain_pct = max(0, pct_at_resistance)
+                    loss_pct = abs(min(0, pct_at_support))
+                else:  # PUT
+                    gain_pct = max(0, pct_at_support)
+                    loss_pct = abs(min(0, pct_at_resistance))
+                
+                if loss_pct > 0:
+                    risk_ratio = round(gain_pct / loss_pct, 2)
+                elif gain_pct > 0:
+                    risk_ratio = 99.9  # Cap at 99.9 for UI
                 else:
-                    reward = calculate_option_price('put', day_low, strike, rr_tte, iv) - mid_price
-                    risk = calculate_option_price('put', day_high, strike, rr_tte, iv) - mid_price
-
-                if risk >= 0: risk_ratio = 999.9
-                elif reward <= 0: risk_ratio = 0.0
-                else: risk_ratio = round(reward / abs(risk), 2)
+                    risk_ratio = 0
+            
+            # Map for backward compatibility with frontend components
+            reversal_pct = pct_at_resistance if option_type == 'CALL' else pct_at_support
+            reversal_profit = round((mid_price * (reversal_pct/100)) * 100, 2)
             
             return {
                 "type": option_type,
@@ -675,8 +722,10 @@ def get_top_volume_options(ticker: str, top_n: int = 10) -> dict:
                 "vega": greeks['vega'],
                 "volOiRatio": vol_oi_ratio,
                 "scalpScore": scalp_score,
-                "reversalProfit": reversal_profit,
+                "pctAtSupport": pct_at_support,
+                "pctAtResistance": pct_at_resistance,
                 "reversalPct": reversal_pct,
+                "reversalProfit": reversal_profit,
                 "riskRatio": risk_ratio,
                 "dayHigh": effective_high,
                 "dayLow": effective_low,
