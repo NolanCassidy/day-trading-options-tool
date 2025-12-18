@@ -36,6 +36,84 @@ _cache_ttl = 60  # seconds
 RISK_FREE_RATE = 0.05
 
 
+    theta: float = 0
+    vega: float = 0
+
+def calculate_option_risk_metrics(
+    option_type: str,
+    current_stock_price: float,
+    strike: float,
+    current_time_to_expiry: float,
+    target_dt: datetime,
+    iv: float,
+    mid_price: float,
+    effective_low: float,
+    effective_high: float,
+    ticker: str = ""
+) -> dict:
+    """
+    Unifies profit/loss calculation using the Additive Change Model.
+    Pins theoretical $ moves to the actual market mid_price.
+    """
+    pct_at_support = 0
+    pct_at_resistance = 0
+    risk_ratio = 0
+    
+    if current_stock_price > 0 and effective_high > 0 and effective_low > 0 and mid_price > 0 and iv > 0:
+        # 1. Current theory baseline
+        price_current_theo = calculate_option_price(option_type.lower(), current_stock_price, strike, current_time_to_expiry, iv)
+        
+        # 2. Target time calculation
+        now = datetime.now()
+        time_to_target_hours = (target_dt - now).total_seconds() / 3600
+        if time_to_target_hours <= 0:
+            time_to_target_hours = 24 + time_to_target_hours
+            
+        # Bound target time within trading year hours
+        max_hours = current_time_to_expiry * 252 * 6.5
+        time_to_target_hours = max(0.1, min(time_to_target_hours, max_hours))
+        time_to_target = time_to_target_hours / (252 * 6.5)
+        
+        # 3. Target theory prices
+        price_at_support_theo = calculate_option_price(option_type.lower(), effective_low, strike, time_to_target, iv)
+        price_at_resistance_theo = calculate_option_price(option_type.lower(), effective_high, strike, time_to_target, iv)
+        
+        # 4. Additive Change Model (pins to mid_price)
+        move_at_support = price_at_support_theo - price_current_theo
+        move_at_resistance = price_at_resistance_theo - price_current_theo
+        
+        expected_price_at_support = max(0.01, mid_price + move_at_support)
+        expected_price_at_resistance = max(0.01, mid_price + move_at_resistance)
+        
+        pct_at_support = round(((expected_price_at_support - mid_price) / mid_price) * 100, 1)
+        pct_at_resistance = round(((expected_price_at_resistance - mid_price) / mid_price) * 100, 1)
+        
+        # 5. R:R logic
+        if option_type.upper() == 'CALL':
+            gain_pct = max(0, pct_at_resistance)
+            loss_pct = abs(min(0, pct_at_support))
+        else:
+            gain_pct = max(0, pct_at_support)
+            loss_pct = abs(min(0, pct_at_resistance))
+            
+        if loss_pct > 0:
+            risk_ratio = round(gain_pct / loss_pct, 2)
+        elif gain_pct > 0:
+            risk_ratio = 99.9
+            
+    # For backward compatibility
+    reversal_pct = pct_at_resistance if option_type.upper() == 'CALL' else pct_at_support
+    reversal_profit = round((mid_price * (reversal_pct/100)) * 100, 2)
+    
+    return {
+        "pctAtSupport": pct_at_support,
+        "pctAtResistance": pct_at_resistance,
+        "riskRatio": risk_ratio,
+        "reversalPct": reversal_pct,
+        "reversalProfit": reversal_profit
+    }
+
+
 def calculate_greeks(stock_price: float, strike: float, time_to_expiry: float, 
                      iv: float, option_type: str = 'call') -> dict:
     """
@@ -393,60 +471,11 @@ def get_options_chain(ticker: str, expiry: Optional[str] = None, target_time: Op
         # Scalp Score
         scalp_score = calculate_scalp_score(greeks['gamma'], vol_oi_ratio, spread_pct, greeks['delta'])
         
-        # Calculate pctAtSupport and pctAtResistance using Black-Scholes
-        # Based on target_dt (exit time) and support/resistance levels
-        pct_at_support = 0
-        pct_at_resistance = 0
-        risk_ratio = 0
+        # Calculate Risk Metrics
+        risk_metrics = calculate_option_risk_metrics(
+            opt_type, current_price, strike, time_to_expiry, target_dt, iv, mid_price, effective_low, effective_high, ticker
+        )
         
-        if current_price > 0 and effective_high > 0 and effective_low > 0 and mid_price > 0 and iv > 0:
-            # Calculate time to target exit (in years)
-            now = datetime.now()
-            time_to_target_hours = max(0.5, (target_dt - now).total_seconds() / 3600)
-            # Convert to years using trading hours (252 days * 6.5 hours/day)
-            time_to_target = time_to_target_hours / (252 * 6.5)
-            
-            # Calculate option price at support level at target time
-            price_at_support = calculate_option_price(
-                opt_type.lower(), 
-                effective_low, 
-                strike, 
-                time_to_target, 
-                iv
-            )
-            
-            # Calculate option price at resistance level at target time
-            price_at_resistance = calculate_option_price(
-                opt_type.lower(), 
-                effective_high, 
-                strike, 
-                time_to_target, 
-                iv
-            )
-            
-            # Calculate profit/loss % at each level
-            # Positive = profit, Negative = loss
-            pct_at_support = round(((price_at_support - mid_price) / mid_price) * 100, 1) if mid_price > 0 else 0
-            pct_at_resistance = round(((price_at_resistance - mid_price) / mid_price) * 100, 1) if mid_price > 0 else 0
-            
-            # Calculate R:R based on option type
-            # CALL: resistance = TP (gain), support = SL (loss)
-            # PUT: support = TP (gain), resistance = SL (loss)
-            if opt_type == 'CALL':
-                gain = max(0, pct_at_resistance)
-                loss = abs(min(0, pct_at_support))
-            else:  # PUT
-                gain = max(0, pct_at_support)
-                loss = abs(min(0, pct_at_resistance))
-            
-            if loss > 0:
-                risk_ratio = round(gain / loss, 2)
-            elif gain > 0:
-                risk_ratio = 999.9  # Infinite R:R
-            else:
-                risk_ratio = 0
-
-
         return {
             "strike": strike,
             "lastPrice": last_price,
@@ -459,15 +488,20 @@ def get_options_chain(ticker: str, expiry: Optional[str] = None, target_time: Op
             "impliedVolatility": round(iv * 100, 2),
             "inTheMoney": bool(row['inTheMoney']),
             "contractSymbol": row['contractSymbol'],
-            # key additions
+            # Key additions
             "delta": greeks['delta'],
             "gamma": greeks['gamma'],
+            "theta": greeks['theta'],
+            "vega": greeks['vega'],
             "scalpScore": scalp_score,
-            "pctAtSupport": pct_at_support,
-            "pctAtResistance": pct_at_resistance,
-            "riskRatio": risk_ratio,
+            "pctAtSupport": risk_metrics['pctAtSupport'],
+            "pctAtResistance": risk_metrics['pctAtResistance'],
+            "riskRatio": risk_metrics['riskRatio'],
+            "reversalPct": risk_metrics['reversalPct'],
+            "reversalProfit": risk_metrics['reversalProfit'],
             "spread": round(ask - bid, 2),
-            "type": opt_type
+            "type": opt_type,
+            "stockPrice": current_price
         }
     
     # Format calls
@@ -621,87 +655,10 @@ def get_top_volume_options(ticker: str, top_n: int = 10, target_time: Optional[s
                 delta=greeks['delta']
             )
             
-            # Calculate pctAtSupport and pctAtResistance using Black-Scholes Change Model
-            # This pins the theoretical price move to the actual market price
-            pct_at_support = 0
-            pct_at_resistance = 0
-            risk_ratio = 0
-            
-            if current_price > 0 and effective_high > 0 and effective_low > 0 and mid_price > 0 and iv > 0:
-                # 1. Calculate current theoretical price as baseline
-                # Use current time_to_expiry
-                price_current_theo = calculate_option_price(
-                    option_type.lower(),
-                    current_price,
-                    strike,
-                    time_to_expiry,
-                    iv
-                )
-                
-                # 2. Calculate time to target exit (in years)
-                now = datetime.now()
-                time_to_target_hours = (target_dt - now).total_seconds() / 3600
-                if time_to_target_hours <= 0:
-                    # If target is in the past or now, assume it's for tomorrow/next trading session
-                    time_to_target_hours = 24 + time_to_target_hours
-                
-                # Ensure we don't calculate for time after expiry
-                max_hours = time_to_expiry * 252 * 6.5
-                time_to_target_hours = max(0.1, min(time_to_target_hours, max_hours))
-                time_to_target = time_to_target_hours / (252 * 6.5)
-                
-                # 3. Calculate theoretical prices at support/resistance levels at target time
-                price_at_support_theo = calculate_option_price(
-                    option_type.lower(), 
-                    effective_low, 
-                    strike, 
-                    time_to_target, 
-                    iv
-                )
-                
-                price_at_resistance_theo = calculate_option_price(
-                    option_type.lower(), 
-                    effective_high, 
-                    strike, 
-                    time_to_target, 
-                    iv
-                )
-                
-                # 4. Use Additive Change Model: Market Price + (Target Theo - Current Theo)
-                # This is more robust than scaling when prices are near zero
-                move_at_support = price_at_support_theo - price_current_theo
-                move_at_resistance = price_at_resistance_theo - price_current_theo
-                
-                expected_price_at_support = max(0.01, mid_price + move_at_support)
-                expected_price_at_resistance = max(0.01, mid_price + move_at_resistance)
-                
-                pct_at_support = round(((expected_price_at_support - mid_price) / mid_price) * 100, 1)
-                pct_at_resistance = round(((expected_price_at_resistance - mid_price) / mid_price) * 100, 1)
-                
-                # DEBUG: Print all values for verification
-                print(f"[PROFIT CALC] {ticker} {option_type} ${strike}: T_now={time_to_expiry:.6f}, T_target={time_to_target:.6f}")
-                print(f"[PROFIT CALC]   Market={mid_price:.2f}, Theo_Now={price_current_theo:.2f}")
-                print(f"[PROFIT CALC]   Support={effective_low} -> Theo={price_at_support_theo:.2f}, Expected={expected_price_at_support:.2f}, Pct={pct_at_support}%")
-                print(f"[PROFIT CALC]   Resist={effective_high} -> Theo={price_at_resistance_theo:.2f}, Expected={expected_price_at_resistance:.2f}, Pct={pct_at_resistance}%")
-
-                # 5. Calculate R:R based on option type
-                if option_type == 'CALL':
-                    gain_pct = max(0, pct_at_resistance)
-                    loss_pct = abs(min(0, pct_at_support))
-                else:  # PUT
-                    gain_pct = max(0, pct_at_support)
-                    loss_pct = abs(min(0, pct_at_resistance))
-                
-                if loss_pct > 0:
-                    risk_ratio = round(gain_pct / loss_pct, 2)
-                elif gain_pct > 0:
-                    risk_ratio = 99.9  # Cap at 99.9 for UI
-                else:
-                    risk_ratio = 0
-            
-            # Map for backward compatibility with frontend components
-            reversal_pct = pct_at_resistance if option_type == 'CALL' else pct_at_support
-            reversal_profit = round((mid_price * (reversal_pct/100)) * 100, 2)
+            # Calculate updated Risk Metrics
+            risk_metrics = calculate_option_risk_metrics(
+                option_type, current_price, strike, time_to_expiry, target_dt, iv, mid_price, effective_low, effective_high, ticker
+            )
             
             return {
                 "type": option_type,
@@ -722,15 +679,16 @@ def get_top_volume_options(ticker: str, top_n: int = 10, target_time: Optional[s
                 "vega": greeks['vega'],
                 "volOiRatio": vol_oi_ratio,
                 "scalpScore": scalp_score,
-                "pctAtSupport": pct_at_support,
-                "pctAtResistance": pct_at_resistance,
-                "reversalPct": reversal_pct,
-                "reversalProfit": reversal_profit,
-                "riskRatio": risk_ratio,
+                "pctAtSupport": risk_metrics['pctAtSupport'],
+                "pctAtResistance": risk_metrics['pctAtResistance'],
+                "reversalPct": risk_metrics['reversalPct'],
+                "reversalProfit": risk_metrics['reversalProfit'],
+                "riskRatio": risk_metrics['riskRatio'],
                 "dayHigh": effective_high,
                 "dayLow": effective_low,
                 "actualHigh": day_high,
-                "actualLow": day_low
+                "actualLow": day_low,
+                "stockPrice": current_price
             }
 
         calls_sorted = opt.calls.sort_values('volume', ascending=False).head(top_n)
@@ -810,7 +768,7 @@ TOP_STOCKS = [
 ]
 
 
-def scan_market_options(top_n_per_stock: int = 3) -> dict:
+def scan_market_options(top_n_per_stock: int = 3, target_time: Optional[str] = None) -> dict:
     """Scan multiple top stocks and return the most active options across all of them.
     Uses parallel execution for faster scanning.
     Fetches tickers from database watchlist."""
@@ -832,7 +790,7 @@ def scan_market_options(top_n_per_stock: int = 3) -> dict:
     def fetch_stock_options(ticker):
         """Fetch options for a single stock - runs in parallel"""
         try:
-            result = get_top_volume_options(ticker, top_n=top_n_per_stock)
+            result = get_top_volume_options(ticker, top_n=top_n_per_stock, target_time=target_time)
             return (ticker, result, None)
         except Exception as e:
             return (ticker, None, str(e))

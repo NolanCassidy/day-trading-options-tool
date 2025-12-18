@@ -605,6 +605,23 @@ body {
   color: var(--text-muted);
 }
 
+/* Profit/Loss percentage coloring */
+.profit-pct {
+  color: var(--green);
+  font-weight: 500;
+}
+
+.loss-pct {
+  color: var(--red);
+  font-weight: 500;
+}
+
+/* Exit time input styling */
+.exit-time-input {
+  min-width: 150px;
+  color-scheme: dark;
+}
+
 /* Loading & Empty States */
 .loading {
   display: flex;

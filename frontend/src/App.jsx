@@ -47,6 +47,17 @@ function App() {
   const [showFindOption, setShowFindOption] = useState(false)
   const [aiScope, setAiScope] = useState('both') // 'calls', 'puts', 'both'
   const [tickerLevels, setTickerLevels] = useState({ support: '', resistance: '' })
+  // Target exit time for profit calculations (default: today 12:30 PM, or tomorrow if past)
+  const [targetTime, setTargetTime] = useState(() => {
+    const now = new Date()
+    const target = new Date()
+    target.setHours(12, 30, 0, 0)
+    // If 12:30 PM has already passed today, use tomorrow
+    if (now > target) {
+      target.setDate(target.getDate() + 1)
+    }
+    return target.toISOString().slice(0, 16) // Format for datetime-local input
+  })
 
   // Filter state
   const [filters, setFilters] = useState({
@@ -247,7 +258,7 @@ function App() {
     setSearchTicker('')
 
     try {
-      const res = await fetch(`${API_BASE}/api/scan`)
+      const res = await fetch(`${API_BASE}/api/scan?target_time=${encodeURIComponent(targetTime)}`)
       if (res.ok) {
         const data = await res.json()
         setScanResults(data)
@@ -308,7 +319,9 @@ function App() {
     setScanResults(null)
 
     try {
-      const topVolumeRes = await fetch(`${API_BASE}/api/top-volume/${symbol}`)
+      // Include target_time parameter for profit calculations
+      const topVolumeUrl = `${API_BASE}/api/top-volume/${symbol}?target_time=${encodeURIComponent(targetTime)}`
+      const topVolumeRes = await fetch(topVolumeUrl)
       if (topVolumeRes.ok) {
         const topVolumeData = await topVolumeRes.json()
         setTopVolume(topVolumeData)
@@ -332,9 +345,11 @@ function App() {
         throw new Error('Failed to fetch options data')
       }
 
-      const optionsUrl = expiry
-        ? `${API_BASE}/api/options/${symbol}?expiry=${expiry}`
-        : `${API_BASE}/api/options/${symbol}`
+      // Include target_time parameter for profit calculations in options chain
+      let optionsUrl = `${API_BASE}/api/options/${symbol}?target_time=${encodeURIComponent(targetTime)}`
+      if (expiry) {
+        optionsUrl += `&expiry=${expiry}`
+      }
       try {
         const optionsRes = await fetch(optionsUrl)
         if (optionsRes.ok) {
@@ -706,7 +721,8 @@ function App() {
                     <th>Δ</th>
                     <th>γ</th>
                     <th>Score</th>
-                    <th>Rev%</th>
+                    <th>% @ Sup</th>
+                    <th>% @ Res</th>
                     <th>R:R</th>
                     <th>Spread</th>
                     <th>Vol</th>
@@ -732,8 +748,11 @@ function App() {
                       <td className={`score-cell ${opt.scalpScore >= 40 ? 'score-hot' : opt.scalpScore >= 25 ? 'score-good' : ''}`}>
                         {opt.scalpScore?.toFixed(0) || '-'}
                       </td>
-                      <td className={opt.reversalPct >= 20 ? 'reversal-hot' : opt.reversalPct >= 10 ? 'reversal-good' : ''}>
-                        {opt.reversalPct > 0 ? `+${opt.reversalPct}%` : '-'}
+                      <td className={opt.pctAtSupport >= 0 ? 'profit-pct' : 'loss-pct'}>
+                        {opt.pctAtSupport !== 0 ? `${opt.pctAtSupport > 0 ? '+' : ''}${opt.pctAtSupport}%` : '-'}
+                      </td>
+                      <td className={opt.pctAtResistance >= 0 ? 'profit-pct' : 'loss-pct'}>
+                        {opt.pctAtResistance !== 0 ? `${opt.pctAtResistance > 0 ? '+' : ''}${opt.pctAtResistance}%` : '-'}
                       </td>
                       <td className={opt.riskRatio >= 2 ? 'rr-good' : opt.riskRatio >= 1 ? 'rr-ok' : 'rr-bad'}>
                         {opt.riskRatio > 0 ? `${opt.riskRatio}:1` : '-'}
@@ -820,6 +839,21 @@ function App() {
                   className="ticker-level-input"
                 />
               </div>
+              <div className="level-group">
+                <label>Exit Time</label>
+                <input
+                  type="datetime-local"
+                  value={targetTime}
+                  onChange={(e) => {
+                    setTargetTime(e.target.value)
+                  }}
+                  onBlur={() => {
+                    // Refresh data when exit time changes
+                    if (searchTicker) fetchData(searchTicker, selectedExpiry || null)
+                  }}
+                  className="ticker-level-input exit-time-input"
+                />
+              </div>
               <button
                 className="clear-levels-btn"
                 onClick={() => {
@@ -873,7 +907,8 @@ function App() {
                   <th>Last</th>
                   <th>Bid</th>
                   <th>Ask</th>
-                  <th>Rev%</th>
+                  <th>% @ Sup</th>
+                  <th>% @ Res</th>
                   <th>R:R</th>
                   <th>Spread</th>
                   <th>Volume</th>
@@ -888,8 +923,11 @@ function App() {
                     <td>{formatPrice(opt.lastPrice)}</td>
                     <td>{formatPrice(opt.bid)}</td>
                     <td>{formatPrice(opt.ask)}</td>
-                    <td className={opt.reversalPct >= 20 ? 'reversal-hot' : opt.reversalPct >= 10 ? 'reversal-good' : ''}>
-                      {opt.reversalPct > 0 ? `+${opt.reversalPct}%` : '-'}
+                    <td className={opt.pctAtSupport >= 0 ? 'profit-pct' : 'loss-pct'}>
+                      {opt.pctAtSupport !== 0 ? `${opt.pctAtSupport > 0 ? '+' : ''}${opt.pctAtSupport}%` : '-'}
+                    </td>
+                    <td className={opt.pctAtResistance >= 0 ? 'profit-pct' : 'loss-pct'}>
+                      {opt.pctAtResistance !== 0 ? `${opt.pctAtResistance > 0 ? '+' : ''}${opt.pctAtResistance}%` : '-'}
                     </td>
                     <td className={opt.riskRatio >= 2 ? 'rr-good' : opt.riskRatio >= 1 ? 'rr-ok' : 'rr-bad'}>
                       {opt.riskRatio > 0 ? `${opt.riskRatio}:1` : '-'}
@@ -1016,7 +1054,8 @@ function App() {
                   <th>Last</th>
                   <th>Bid</th>
                   <th>Ask</th>
-                  <th>Rev%</th>
+                  <th>% @ Sup</th>
+                  <th>% @ Res</th>
                   <th>R:R</th>
                   <th>Change</th>
                   <th>Volume</th>
@@ -1033,8 +1072,11 @@ function App() {
                     <td>{formatPrice(opt.lastPrice)}</td>
                     <td>{formatPrice(opt.bid)}</td>
                     <td>{formatPrice(opt.ask)}</td>
-                    <td className={opt.reversalPct >= 20 ? 'reversal-hot' : opt.reversalPct >= 10 ? 'reversal-good' : ''}>
-                      {opt.reversalPct > 0 ? `+${opt.reversalPct}%` : '-'}
+                    <td className={opt.pctAtSupport >= 0 ? 'profit-pct' : 'loss-pct'}>
+                      {opt.pctAtSupport !== 0 ? `${opt.pctAtSupport > 0 ? '+' : ''}${opt.pctAtSupport}%` : '-'}
+                    </td>
+                    <td className={opt.pctAtResistance >= 0 ? 'profit-pct' : 'loss-pct'}>
+                      {opt.pctAtResistance !== 0 ? `${opt.pctAtResistance > 0 ? '+' : ''}${opt.pctAtResistance}%` : '-'}
                     </td>
                     <td className={opt.riskRatio >= 2 ? 'rr-good' : opt.riskRatio >= 1 ? 'rr-ok' : 'rr-bad'}>
                       {opt.riskRatio > 0 ? `${opt.riskRatio}:1` : '-'}

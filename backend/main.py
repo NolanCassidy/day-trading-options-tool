@@ -67,30 +67,37 @@ async def quote_lite(ticker: str):
 
 
 @app.get("/api/options/{ticker}")
-async def options(ticker: str, expiry: Optional[str] = None):
+async def options(ticker: str, expiry: Optional[str] = None, target_time: Optional[str] = None):
     """Get options chain for a stock"""
     try:
-        data = get_options_chain(ticker.upper(), expiry)
+        data = get_options_chain(ticker.upper(), expiry, target_time)
         return data
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Error fetching options for {ticker}: {str(e)}")
 
 
 @app.get("/api/top-volume/{ticker}")
-async def top_volume(ticker: str, top_n: int = 10):
-    """Get top volume options for near-term expiry (1-2 days out)"""
+async def top_volume(ticker: str, top_n: int = 10, target_time: Optional[str] = None):
+    """Get top volume options for near-term expiry (1-2 days out).
+    
+    Args:
+        ticker: Stock ticker symbol
+        top_n: Number of top options to return per type (default 10)
+        target_time: Optional ISO datetime string for exit time (e.g., "2025-12-18T12:30:00").
+                     Used for profit calculations at support/resistance levels.
+    """
     try:
-        data = get_top_volume_options(ticker.upper(), top_n)
+        data = get_top_volume_options(ticker.upper(), top_n, target_time)
         return data
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Error fetching top volume for {ticker}: {str(e)}")
 
 
 @app.get("/api/scan")
-async def market_scan():
+async def market_scan(target_time: Optional[str] = None):
     """Scan top stocks for most active options - uses watchlist tickers"""
     try:
-        data = scan_market_options()
+        data = scan_market_options(target_time=target_time)
         return data
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Error scanning market: {str(e)}")
