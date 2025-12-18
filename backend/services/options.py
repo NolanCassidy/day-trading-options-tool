@@ -36,9 +36,6 @@ _cache_ttl = 60  # seconds
 RISK_FREE_RATE = 0.05
 
 
-    theta: float = 0
-    vega: float = 0
-
 def calculate_option_risk_metrics(
     option_type: str,
     current_stock_price: float,
