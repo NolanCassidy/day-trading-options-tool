@@ -17,3 +17,7 @@ dist/
 
 # Logs
 *.log
+
+# Databases
+*.db
+backend/data/
