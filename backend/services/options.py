@@ -510,6 +510,7 @@ def get_top_volume_options(ticker: str, top_n: int = 10) -> dict:
             day_high = data['day_high']
             day_low = data['day_low']
         except:
+            current_price = day_high = day_low = 0
         # Get support/resistance levels from DB
         levels = get_ticker_levels(ticker)
         support_price = levels.get('support_price')
