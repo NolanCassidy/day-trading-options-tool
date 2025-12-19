@@ -36,4 +36,5 @@ services:
       - WATCHTOWER_CLEANUP=true
       - WATCHTOWER_POLL_INTERVAL=300
       - WATCHTOWER_INCLUDE_RESTARTING=true
+      - DOCKER_API_VERSION=1.44
     command: --interval 300 options-backend options-frontend
