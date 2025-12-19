@@ -176,7 +176,7 @@ def get_alpaca_option_bars(
             bars = bars_by_symbol.get(contract_symbol.upper(), [])
         
         if not bars:
-            print(f"[Alpaca] No bars found for {contract_symbol}")
+            print(f"[Alpaca] No bars found for {contract_symbol}. Available symbols in response: {list(bars_by_symbol.keys())}")
             return None
         
         # Convert to our candle format

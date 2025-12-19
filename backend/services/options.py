@@ -1112,9 +1112,13 @@ def get_option_history(contract_symbol: str, period: str = "1mo", interval: str 
             
         if data.empty:
             # Return specific error to frontend so it can show a helpful message
+            # Parse the contract symbol to provide more context
             error_msg = f"No data found for {contract_symbol}"
             if interval in ['15m', '60m', '90m', '1h']:
                 error_msg = "Intraday option data unavailable (Free Tier Limit)"
+            else:
+                # Provide helpful context about why data might be missing
+                error_msg = f"No trading data for {contract_symbol}. This may be due to: no recent trades (illiquid), same-day expiration, or far OTM strike."
             return {"error": error_msg, "candles": []}
             
         candles = []

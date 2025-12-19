@@ -13,8 +13,7 @@ services:
     environment:
       - PYTHONUNBUFFERED=1
     env_file:
-      - path: ./backend/.env
-        required: false
+      - ./backend/.env
 
   frontend:
     image: ghcr.io/nolancassidy/day-trading-options-tool/frontend:latest
