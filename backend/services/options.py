@@ -500,6 +500,13 @@ def get_options_chain(ticker: str, expiry: Optional[str] = None) -> dict:
 
 def get_top_volume_options(ticker: str, top_n: int = 10) -> dict:
     """Get top volume options for near-term expiry (1-2 days out) with Greeks and scalp metrics"""
+    # 1. Initialize variables to handle failures
+    current_price = day_high = day_low = 0
+    best_expiry = None
+    days_to_expiry = 0
+    support_price = resistance_price = None
+    effective_high = effective_low = 0
+    
     try:
         stock = cached_ticker(ticker)
         
@@ -509,16 +516,16 @@ def get_top_volume_options(ticker: str, top_n: int = 10) -> dict:
             current_price = data['current_price']
             day_high = data['day_high']
             day_low = data['day_low']
-        except:
-            current_price = day_high = day_low = 0
+        except Exception:
+            # Keep defaults of 0
+            pass
+
         # Get support/resistance levels from DB
         levels = get_ticker_levels(ticker)
         support_price = levels.get('support_price')
         resistance_price = levels.get('resistance_price')
         
         # Override day high/low if custom levels exist
-        # If user has set a custom resistance, use that as the target high
-        # If user has set a custom support, use that as the target low
         effective_high = resistance_price if resistance_price is not None else day_high
         effective_low = support_price if support_price is not None else day_low
         
@@ -527,12 +534,11 @@ def get_top_volume_options(ticker: str, top_n: int = 10) -> dict:
         for attempt in range(3):
             try:
                 expirations = stock.options
-                break
-            except Exception as e:
+                if expirations:
+                    break
+            except Exception:
                 if attempt < 2:
                     time.sleep(1 * (attempt + 1))
-                else:
-                    raise e
         
         if not expirations:
             return {
@@ -546,225 +552,165 @@ def get_top_volume_options(ticker: str, top_n: int = 10) -> dict:
                 "topPuts": [],
                 "message": "No options available for this ticker"
             }
-    except Exception as e:
-        return {
-            "symbol": ticker.upper(),
-            "expiry": None,
-            "daysToExpiry": 0,
-            "topCalls": [],
-            "topPuts": [],
-            "error": f"Rate limited - please try again in a minute: {str(e)}"
-        }
-    
-    # Find expiry closest to 1 day out (or first available)
-    today = datetime.now().date()
-    target_date = today + timedelta(days=1)
-    
-    # Find the nearest expiry to our target
-    best_expiry = expirations[0]
-    min_diff = float('inf')
-    for exp in expirations[:5]:  # Only check first 5 to limit API calls
-        exp_date = datetime.strptime(exp, '%Y-%m-%d').date()
-        diff = abs((exp_date - target_date).days)
-        if diff < min_diff:
-            min_diff = diff
-            best_expiry = exp
-    
-    # Get options chain
-    try:
-        opt = stock.option_chain(best_expiry)
-    except Exception as e:
+            
+        # Find expiry closest to 1 day out
+        today = datetime.now().date()
+        target_date = today + timedelta(days=1)
+        best_expiry = expirations[0]
+        min_diff = float('inf')
+        for exp in expirations[:5]:
+            exp_date = datetime.strptime(exp, '%Y-%m-%d').date()
+            diff = abs((exp_date - target_date).days)
+            if diff < min_diff:
+                min_diff = diff
+                best_expiry = exp
+        
+        # Get options chain
+        try:
+            opt = stock.option_chain(best_expiry)
+        except Exception as e:
+            return {
+                "symbol": ticker.upper(),
+                "expiry": best_expiry,
+                "daysToExpiry": (datetime.strptime(best_expiry, '%Y-%m-%d').date() - today).days,
+                "error": str(e),
+                "topCalls": [],
+                "topPuts": []
+            }
+        
+        # Calculate days to expiry for Greeks
+        days_to_expiry = (datetime.strptime(best_expiry, '%Y-%m-%d').date() - today).days
+        time_to_expiry = max(days_to_expiry, 0.5) / 365.0
+
+        def format_option(row, option_type):
+            strike = float(row['strike'])
+            last_price = float(row['lastPrice']) if not pd.isna(row['lastPrice']) else 0
+            bid = float(row['bid']) if not pd.isna(row['bid']) else 0
+            ask = float(row['ask']) if not pd.isna(row['ask']) else 0
+            spread = round(ask - bid, 2) if ask and bid else 0
+            volume = int(row['volume']) if not pd.isna(row['volume']) else 0
+            open_interest = int(row['openInterest']) if not pd.isna(row['openInterest']) else 0
+            iv = float(row['impliedVolatility']) if not pd.isna(row['impliedVolatility']) else 0
+            
+            greeks = calculate_greeks(
+                stock_price=current_price if current_price else strike,
+                strike=strike,
+                time_to_expiry=time_to_expiry,
+                iv=iv,
+                option_type=option_type.lower()
+            )
+            
+            vol_oi_ratio = round(volume / open_interest, 2) if open_interest > 0 else 0
+            mid_price = (bid + ask) / 2 if bid and ask else last_price
+            spread_pct = round((spread / mid_price * 100), 1) if mid_price > 0 else 0
+            
+            scalp_score = calculate_scalp_score(
+                gamma=greeks['gamma'],
+                vol_oi_ratio=vol_oi_ratio,
+                spread_pct=spread_pct,
+                delta=greeks['delta']
+            )
+            
+            reversal_profit = 0
+            reversal_pct = 0
+            if current_price and effective_high and effective_low and greeks['delta']:
+                if option_type == 'CALL' and current_price < effective_high:
+                    price_move = effective_high - current_price
+                    reversal_profit = round(price_move * abs(greeks['delta']) * 100, 2)
+                    reversal_pct = round((price_move * abs(greeks['delta']) / mid_price * 100), 1) if mid_price > 0 else 0
+                elif option_type == 'PUT' and current_price > effective_low:
+                    price_move = current_price - effective_low
+                    reversal_profit = round(price_move * abs(greeks['delta']) * 100, 2)
+                    reversal_pct = round((price_move * abs(greeks['delta']) / mid_price * 100), 1) if mid_price > 0 else 0
+            
+            risk_ratio = 0
+            if current_price and day_high and day_low and mid_price > 0:
+                non_trading_deduction = 0.5
+                try:
+                    now = datetime.now()
+                    day = now.weekday()
+                    current_hour = now.hour + now.minute / 60.0
+                    market_open = 6.5
+                    market_close = 13.0
+                    if day >= 5 or current_hour < market_open:
+                        non_trading_deduction = 0.5
+                    elif current_hour >= market_close:
+                        non_trading_deduction = 7.0
+                    else:
+                        elapsed = current_hour - market_open
+                        non_trading_deduction = max(0.5, math.ceil(elapsed * 2) / 2.0)
+                except Exception:
+                    non_trading_deduction = 0.5
+
+                total_trading_hours = max(1, days_to_expiry) * 6.5
+                rr_tte = max(0.1, total_trading_hours - non_trading_deduction) / (252 * 6.5)
+
+                if option_type == 'CALL':
+                    reward = calculate_option_price('call', day_high, strike, rr_tte, iv) - mid_price
+                    risk = calculate_option_price('call', day_low, strike, rr_tte, iv) - mid_price
+                else:
+                    reward = calculate_option_price('put', day_low, strike, rr_tte, iv) - mid_price
+                    risk = calculate_option_price('put', day_high, strike, rr_tte, iv) - mid_price
+
+                if risk >= 0: risk_ratio = 999.9
+                elif reward <= 0: risk_ratio = 0.0
+                else: risk_ratio = round(reward / abs(risk), 2)
+            
+            return {
+                "type": option_type,
+                "strike": strike,
+                "lastPrice": last_price,
+                "bid": bid,
+                "ask": ask,
+                "spread": spread,
+                "spreadPct": spread_pct,
+                "volume": volume,
+                "openInterest": open_interest,
+                "impliedVolatility": round(iv * 100, 2),
+                "inTheMoney": bool(row['inTheMoney']),
+                "contractSymbol": row['contractSymbol'],
+                "delta": greeks['delta'],
+                "gamma": greeks['gamma'],
+                "theta": greeks['theta'],
+                "vega": greeks['vega'],
+                "volOiRatio": vol_oi_ratio,
+                "scalpScore": scalp_score,
+                "reversalProfit": reversal_profit,
+                "reversalPct": reversal_pct,
+                "riskRatio": risk_ratio,
+                "dayHigh": effective_high,
+                "dayLow": effective_low,
+                "actualHigh": day_high,
+                "actualLow": day_low
+            }
+
+        calls_sorted = opt.calls.sort_values('volume', ascending=False).head(top_n)
+        puts_sorted = opt.puts.sort_values('volume', ascending=False).head(top_n)
+        
         return {
             "symbol": ticker.upper(),
             "expiry": best_expiry,
-            "error": str(e),
-            "topCalls": [],
-            "topPuts": []
+            "daysToExpiry": days_to_expiry,
+            "stockPrice": round(current_price, 2) if current_price else 0,
+            "dayHigh": round(day_high, 2) if day_high else 0,
+            "dayLow": round(day_low, 2) if day_low else 0,
+            "targetHigh": round(effective_high, 2) if effective_high else 0,
+            "targetLow": round(effective_low, 2) if effective_low else 0,
+            "supportPrice": support_price,
+            "resistancePrice": resistance_price,
+            "topCalls": [format_option(row, 'CALL') for _, row in calls_sorted.iterrows()],
+            "topPuts": [format_option(row, 'PUT') for _, row in puts_sorted.iterrows()]
         }
-    
-    # Calculate days to expiry for Greeks
-    days_to_expiry = (datetime.strptime(best_expiry, '%Y-%m-%d').date() - today).days
-    time_to_expiry = max(days_to_expiry, 0.5) / 365.0  # At least half day for 0DTE
-    
-    def format_option(row, option_type):
-        strike = float(row['strike'])
-        last_price = float(row['lastPrice']) if not pd.isna(row['lastPrice']) else 0
-        bid = float(row['bid']) if not pd.isna(row['bid']) else 0
-        ask = float(row['ask']) if not pd.isna(row['ask']) else 0
-        spread = round(ask - bid, 2) if ask and bid else 0
-        volume = int(row['volume']) if not pd.isna(row['volume']) else 0
-        open_interest = int(row['openInterest']) if not pd.isna(row['openInterest']) else 0
-        iv = float(row['impliedVolatility']) if not pd.isna(row['impliedVolatility']) else 0
         
-        # Calculate Greeks
-        greeks = calculate_greeks(
-            stock_price=current_price if current_price else strike,
-            strike=strike,
-            time_to_expiry=time_to_expiry,
-            iv=iv,
-            option_type=option_type.lower()
-        )
-        
-        # Calculate vol/OI ratio
-        vol_oi_ratio = round(volume / open_interest, 2) if open_interest > 0 else 0
-        
-        # Spread as percentage of option price
-        mid_price = (bid + ask) / 2 if bid and ask else last_price
-        spread_pct = round((spread / mid_price * 100), 1) if mid_price > 0 else 0
-        
-        # Calculate scalp score
-        scalp_score = calculate_scalp_score(
-            gamma=greeks['gamma'],
-            vol_oi_ratio=vol_oi_ratio,
-            spread_pct=spread_pct,
-            delta=greeks['delta']
-        )
-        
-        # Calculate reversal profit (if stock goes back to high for calls, low for puts)
-        reversal_profit = 0
-        reversal_pct = 0
-        if current_price and effective_high and effective_low and greeks['delta']:
-            if option_type == 'CALL' and current_price < effective_high:
-                # If stock recovers to target high, estimate option profit
-                price_move = effective_high - current_price
-                reversal_profit = round(price_move * abs(greeks['delta']) * 100, 2)  # Per contract
-                reversal_pct = round((price_move * abs(greeks['delta']) / mid_price * 100), 1) if mid_price > 0 else 0
-            elif option_type == 'PUT' and current_price > effective_low:
-                # If stock drops to target low, estimate option profit
-                price_move = current_price - effective_low
-                reversal_profit = round(price_move * abs(greeks['delta']) * 100, 2)  # Per contract
-                reversal_pct = round((price_move * abs(greeks['delta']) / mid_price * 100), 1) if mid_price > 0 else 0
-        
-        # Calculate risk/reward ratio (potential gain at target vs loss at counter-target)
-        # For CALL: gain if stock goes to high, loss if stock goes to low
-        # For PUT: gain if stock goes to low, loss if stock goes to high
-        risk_ratio = 0
-        # Calculate risk/reward ratio using Black-Scholes
-        risk_ratio = 0
-        if current_price and day_high and day_low and mid_price > 0:
-            # Match Frontend: Use Trading Hours Model with dynamic time
-            
-            non_trading_deduction = 0.5
-            try:
-                now = datetime.now()
-                day = now.weekday()
-                current_hour = now.hour + now.minute / 60.0
-                market_open = 6.5
-                market_close = 13.0
-                
-                if day >= 5: # Sat/Sun (5,6)
-                    non_trading_deduction = 0.5
-                elif current_hour < market_open:
-                    non_trading_deduction = 0.5
-                elif current_hour >= market_close:
-                    non_trading_deduction = 6.5 + 0.5
-                else:
-                    elapsed = current_hour - market_open
-                    next_interval = math.ceil(elapsed * 2) / 2.0
-                    if next_interval == elapsed:
-                        next_interval += 0.5
-                    non_trading_deduction = max(0.5, next_interval)
-            except:
-                non_trading_deduction = 0.5
-
-            # 1. Estimate total trading hours
-            est_trading_days = max(1, days_to_expiry)
-            total_trading_hours = est_trading_days * 6.5
-            
-            # 2. Subtract calculated deduction
-            hours_remaining = max(0.1, total_trading_hours - non_trading_deduction)
-            
-            # 3. Calculate T using Trading Year
-            rr_tte = hours_remaining / (252 * 6.5)
-
-            if option_type == 'CALL':
-                # Reward: Price at Day High
-                price_at_high = calculate_option_price('call', day_high, strike, rr_tte, iv)
-                reward = price_at_high - mid_price
-                
-                # Risk: Price at Day Low
-                price_at_low = calculate_option_price('call', day_low, strike, rr_tte, iv)
-                risk = price_at_low - mid_price
-                
-            elif option_type == 'PUT':
-                # Reward: Price at Day Low
-                price_at_low = calculate_option_price('put', day_low, strike, rr_tte, iv)
-                reward = price_at_low - mid_price
-                
-                # Risk: Price at Day High
-                price_at_high = calculate_option_price('put', day_high, strike, rr_tte, iv)
-                risk = price_at_high - mid_price
-
-            # Calculate R:R Ratio
-            if risk >= 0:
-                risk_ratio = 999.9  # Infinite
-            elif reward <= 0:
-                risk_ratio = 0.0
-            else:
-                risk_ratio = round(reward / abs(risk), 2)
-        
-        return {
-            "type": option_type,
-            "strike": strike,
-            "lastPrice": last_price,
-            "bid": bid,
-            "ask": ask,
-            "spread": spread,
-            "spreadPct": spread_pct,
-            "volume": volume,
-            "openInterest": open_interest,
-            "impliedVolatility": round(iv * 100, 2),
-            "inTheMoney": bool(row['inTheMoney']),
-            "contractSymbol": row['contractSymbol'],
-            # Greeks
-            "delta": greeks['delta'],
-            "gamma": greeks['gamma'],
-            "theta": greeks['theta'],
-            "vega": greeks['vega'],
-            # Scalp metrics
-            "volOiRatio": vol_oi_ratio,
-            "scalpScore": scalp_score,
-            # Reversal profit
-            "reversalProfit": reversal_profit,
-            "reversalPct": reversal_pct,
-            "riskRatio": risk_ratio,
-            # Ensure consistent High/Low data for frontend estimator
-            "dayHigh": effective_high,
-            "dayLow": effective_low,
-            "actualHigh": day_high,
-            "actualLow": day_low
-        }
-    
-    # Sort by volume and get top N
-    calls_sorted = opt.calls.sort_values('volume', ascending=False).head(top_n)
-    puts_sorted = opt.puts.sort_values('volume', ascending=False).head(top_n)
-    
-    top_calls = [format_option(row, 'CALL') for _, row in calls_sorted.iterrows()]
-    top_puts = [format_option(row, 'PUT') for _, row in puts_sorted.iterrows()]
-    
-    return {
-        "symbol": ticker.upper(),
-        "expiry": best_expiry,
-        "daysToExpiry": days_to_expiry,
-        "stockPrice": round(current_price, 2) if current_price else 0,
-        "dayHigh": round(day_high, 2) if day_high else 0,
-        "dayLow": round(day_low, 2) if day_low else 0,
-        "targetHigh": round(effective_high, 2) if effective_high else 0,
-        "targetLow": round(effective_low, 2) if effective_low else 0,
-        "supportPrice": support_price,
-        "resistancePrice": resistance_price,
-        "topCalls": top_calls,
-        "topPuts": top_puts
-    }
     except Exception as e:
         traceback.print_exc()
         return {
             "symbol": ticker.upper(),
-            "expiry": best_expiry if 'best_expiry' in locals() else None,
-            "daysToExpiry": days_to_expiry if 'days_to_expiry' in locals() else 0,
+            "expiry": best_expiry,
+            "daysToExpiry": days_to_expiry,
+            "error": f"Error scanning options: {str(e)}",
             "topCalls": [],
-            "topPuts": [],
-            "error": f"Error scanning options: {str(e)}"
+            "topPuts": []
         }
 
 
